@@ -4,7 +4,7 @@ import json, os, sys, threading, urllib.parse, urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone
 
-YOUTUBE_DIR = os.path.expanduser("{YOUTUBE_CONFIG_DIR}")
+YOUTUBE_DIR = os.path.expanduser("~/.hermes/youtube")
 SECRETS_FILE = os.path.join(YOUTUBE_DIR, "video_uploader.json")
 TOKEN_FILE = os.path.join(YOUTUBE_DIR, "request.token")
 REDIRECT_URI = "http://localhost:18080/"

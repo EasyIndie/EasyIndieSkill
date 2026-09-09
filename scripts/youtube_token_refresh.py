@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
-YOUTUBE_DIR = os.environ.get("YOUTUBE_DIR", os.path.expanduser("{YOUTUBE_CONFIG_DIR}"))
+YOUTUBE_DIR = os.environ.get("YOUTUBE_DIR", os.path.expanduser("~/.hermes/youtube"))
 TOKEN_FILE = os.path.join(YOUTUBE_DIR, "request.token")
 SECRETS_FILE = os.path.join(YOUTUBE_DIR, "video_uploader.json")
 

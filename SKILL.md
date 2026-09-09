@@ -1,7 +1,7 @@
 ---
 name: easyindie
 description: "EasyIndie 内容自动化统一技能（多领域扩展）：YouTube 搬运/内容创作（当前），后续按领域扩展 audio/video/ai-music 等。"
-version: 1.0.0
+version: 1.0.1
 author: Hermes Agent
 tags: [youtube, video, audio, content, automation, upload, oauth]
 platforms: [macos, linux]
@@ -57,8 +57,8 @@ required_commands: [yt-dlp, ffmpeg, ffprobe, python3, node]
 
 ## 标题偏好（按用户）
 
-- **{USER_B}**：`【ASMR】{简短标题}`（无时长前缀、无分隔符），如 `【ASMR】不良少女的深夜独白`；中文，给 5 个方案选择
-- **{USER_A}**：`【ASMR】{N}分钟{核心内容} · {修饰/副标题}`；中文，5 个方案
+- **老板**：`【ASMR】{简短标题}`（无时长前缀、无分隔符），如 `【ASMR】不良少女的深夜独白`；中文，给 5 个方案选择
+- **zhulongyixian**：`【ASMR】{N}分钟{核心内容} · {修饰/副标题}`；中文，5 个方案
 - 音频特征分析（静音段/音量判断有无语音）：`ffprobe` + `ffmpeg silencedetect`
 
 ## 上传与 OAuth
@@ -70,7 +70,7 @@ source scripts/common/upload.sh && upload_video <file> "<title>" "<desc>" [priva
 ```
 
 - **token 刷新（推荐 Python 版）**：`python3 scripts/youtube_token_refresh.py`（macOS 上 bash 版有引用脆弱性）
-- **一键重授权**：`python3 {YOUTUBE_CONFIG_DIR}/re_auth_youtube.py`（打印 URL → 浏览器授权 → 自动换 token）
+- **一键重授权**：`python3 ~/.hermes/youtube/re_auth_youtube.py`（打印 URL → 浏览器授权 → 自动换 token）
 - **GFW 网络限制**：Google OAuth 端点不可达时设 `HTTPS_PROXY` 或远程刷新 token 传回
 - **Refresh token 生命周期**：`refresh_token_expires_in` ≈ 2.7 天——cron 连续 3 天刷新失败则必须重新完整授权
 - cron 建议：每 6h 刷新（`0 */6 * * *`，deliver local）
@@ -101,6 +101,7 @@ python3 scripts/fetch_transcript.py "<URL>" [--text-only|--timestamps] [--langua
 
 | 文件 | 内容 |
 |:--|:--|
+| collaboration-setup.md | **多设备协作开启流程**（public 单仓库 + 占位符双向转换 bisync 模型；本技能近零真实值盘点；铁律 8 条） |
 | youtube-asmr-audio-format.md | Opus 48kHz / VP9 黑帧 / -c:a copy 技术背景 |
 | youtube-audio-analysis.md | 音频内容分析（静音检测/类型判定/元数据） |
 | youtube-oauth-token-exchange.md | OAuth 授权码手动交换流程 |

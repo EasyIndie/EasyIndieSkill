@@ -47,7 +47,7 @@ echo "HTTP_PROXY=$HTTP_PROXY"; echo "HTTPS_PROXY=$HTTPS_PROXY"
 
 Second incident: script printed `❌ 刷新失败: invalid_grant` — this is a **real JSON error from Google**, not an empty response. Root cause: refresh token itself permanently expired (its `refresh_token_expires_in` ≈ 2.7 days ran out ~Jul 7; token file last refreshed Jul 4). Network was fine.
 
-- `invalid_grant` = refresh token revoked/expired → **cannot be fixed by retry**, must run full re-auth: `python3 {YOUTUBE_CONFIG_DIR}/re_auth_youtube.py` (backups old token to request.token.bak, serves callback on localhost:18080, auto-verifies new refresh token).
+- `invalid_grant` = refresh token revoked/expired → **cannot be fixed by retry**, must run full re-auth: `python3 ~/.hermes/youtube/re_auth_youtube.py` (backups old token to request.token.bak, serves callback on localhost:18080, auto-verifies new refresh token).
 - Third occurrence (2026-08-05): same `invalid_grant`. Token file was STILL the 2026-07-04 one → the Aug 3 re-auth was prepared (script written) but never completed (no request.token.bak, no browser callback). Pattern confirmed: cron can only detect + report; the re-auth step is interactive (browser) and must be run by the user. Do NOT retry refresh on invalid_grant (pointless + suspicious repeated auth traffic).
 - Distinguish: curl empty response / JSONDecodeError = network block (needs VPN/proxy); `error: invalid_grant` in JSON = dead refresh token (needs manual re-auth).
 - After re-auth, `refresh_token_expires_in` counts down from issuance — cron must refresh successfully within that window (~2.7 days) or the token dies silently again.

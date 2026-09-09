@@ -2,6 +2,7 @@
 
 > 2026-09-09 沉淀（方法论出自 skill-git-export 7c「多设备双向协作」，orzmc 已实测跑通）。
 > 触发：老板要把本技能放到多台设备的 Hermes 上协作迭代（如 Mac + Windows），或本技能要同步到 GitHub 供多机复用。
+> **✅ 已落地（2026-09-09）**：仓库 = `EasyIndie/EasyIndieSkill`（PUBLIC，2026-08-10 建仓推 v1.0.0）；Mac 侧 A=`~/EasyIndieSkill`、B=技能目录；双向脚本 `~/.hermes/scripts/easyindie_bisync.sh`；cron「easyindie 技能双向同步」every 60m（no_agent）。Windows 等新设备接入 = 下文步骤 6 模板（路径换 easyindie）。
 
 ## 核心模型（public 单仓库 + 占位符双向转换）
 

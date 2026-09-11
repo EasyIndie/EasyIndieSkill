@@ -19,7 +19,27 @@
 
 **因此每次重授权只能买到 7 天**（8-12 重授权 → 8-19 又死），是本任务反复失效的唯一根因。
 
-### 两种修法
+### 永久修复控制台操作路径（新版 Google Auth Platform UI，2026-09-12 实查）
+
+- **项目**：`videouploader-500608`（client_id 前缀 `5787735111-`）
+- 旧链接 `console.cloud.google.com/apis/credentials/consent` 会**自动跳转**到新版
+  **Google Auth Platform → Overview 概览页**，而**概览页没有发布按钮** → 常见「找不到 Publish app」的原因。
+- 发布按钮在两处之一：
+  1. **Audience（受众）页**：`https://console.cloud.google.com/auth/audience` → `Publishing status` 行右侧 `Publish app`
+  2. Overview 页也可能直接列出 `Publishing status`
+- ⚠️ **发布前置条件**：Branding 页必须配置完整，否则点发布提示
+  *"To publish your app, you must complete your configuration on the Branding page"*
+  （`https://console.cloud.google.com/auth/branding?project=<项目ID>`）。
+  需填：**App name** + **User support email** + **Developer contact information（≥1 邮箱）**；
+  App logo 可选；**App domain / Authorized domains 桌面(installed)应用一般不需要填**
+  （Authorized domains 还要求在 Search Console 验证域名所有权，乱填会卡住）。
+  若敏感 scope 被要求隐私政策链接 → 可用自有域名（如 `jokerhub.cn`）托管一页静态隐私政策。
+- 发布 **In production 后无需过 Google 验证审核**，unverified + production 组合即得到不过期的
+  refresh token（未验证应用约 100 用户上限，自用无影响）。
+- **发布零费用**：OAuth 配置、发布、验证全免费，无需绑结算账号；
+  唯一额度概念是 YouTube Data API 配额（默认 10,000 单位/天，上传 1 视频 ≈ 1,600 单位 ≈ 6 个/天，超限 403 不扣费）。
+
+
 
 | 方案 | 操作 | 效果 |
 |:--|:--|:--|

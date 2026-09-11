@@ -8,7 +8,7 @@ More reliable than the bash equivalent (youtube_token_refresh.sh) on macOS:
 - Works correctly under cron jobs with restricted shells
 
 Usage:
-    python3 ~/.hermes/skills/media/youtube-carry-workflow/scripts/youtube_token_refresh.py
+    python3 ~/.hermes/skills/media/easyindie/scripts/youtube_token_refresh.py
 
 Environment:
     YOUTUBE_DIR  — override default ($HOME/.hermes/youtube)
@@ -16,6 +16,12 @@ Environment:
 Returns:
     exit 0 + "✅ Token refreshed" on success
     exit 1 + "❌ ..." on any failure
+
+v2 (2026-09-12):
+- HTTPError 单独处理并读取响应体 → 报出 Google 真实 error code
+  （旧版把 HTTPError 当 URLError，只打印 "HTTP Error 400"，看不出 invalid_grant）
+- invalid_grant 分支直接给出重授权命令与根因（Testing 发布状态 → refresh token 固定 7 天寿命）
+- 每次成功刷新后打印 refresh token 剩余寿命，<24h 提前告警（避免再次静默死亡）
 """
 
 import json
@@ -30,6 +36,8 @@ from datetime import datetime, timezone
 YOUTUBE_DIR = os.environ.get("YOUTUBE_DIR", os.path.expanduser("~/.hermes/youtube"))
 TOKEN_FILE = os.path.join(YOUTUBE_DIR, "request.token")
 SECRETS_FILE = os.path.join(YOUTUBE_DIR, "video_uploader.json")
+
+RE_AUTH_CMD = "python3 ~/.hermes/youtube/re_auth_youtube.py"
 
 
 def die(msg: str) -> None:
@@ -73,7 +81,7 @@ def main() -> None:
     # 4. Check refresh token exists
     refresh_token = old_token.get("refresh_token", "")
     if not refresh_token:
-        die("无 refresh_token，需要重新 OAuth 授权")
+        die(f"无 refresh_token，需要重新 OAuth 授权: {RE_AUTH_CMD}")
 
     print("🔄 刷新 token...", file=sys.stderr)
 
@@ -89,6 +97,27 @@ def main() -> None:
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
             new_token = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        # MUST be handled before URLError (HTTPError is a URLError subclass) —
+        # the response body carries Google's real error code.
+        body = ""
+        try:
+            body = e.read().decode("utf-8", "replace")
+        except Exception:
+            pass
+        err = ""
+        try:
+            err = (json.loads(body) or {}).get("error", "")
+        except Exception:
+            pass
+        if err == "invalid_grant":
+            die(
+                "刷新失败 (invalid_grant) — refresh token 已失效/被撤销，重试无效。\n"
+                "   根因：本 OAuth 应用 publishing status = Testing → refresh token 固定 7 天寿命（与是否有活动无关）。\n"
+                f"   处置：人工一次性重授权 → {RE_AUTH_CMD}\n"
+                "   永久修复：Google Cloud Console → OAuth consent screen → Publishing status 改为 In production（token 不再过期）。"
+            )
+        die(f"刷新失败 HTTP {e.code}: {err or body[:300] or '(空响应体)'}")
     except urllib.error.URLError as e:
         if isinstance(e.reason, TimeoutError) or "timed out" in str(e.reason).lower():
             die(f"连接 {token_uri} 超时 — Google 服务在当前网络下不可达")
@@ -107,10 +136,26 @@ def main() -> None:
         with open(TOKEN_FILE, "w") as f:
             json.dump(new_token, f, indent=2)
         print(f"✅ Token 已刷新，过期时间: {new_token['expiry']}")
+
+        # Refresh-token lifetime watchdog: Testing 状态固定 7 天，提前 24h 告警
+        rti = new_token.get("refresh_token_expires_in")
+        if isinstance(rti, (int, float)) and rti > 0:
+            hours = rti / 3600
+            if hours < 24:
+                print(
+                    f"⚠️ refresh token 剩余寿命仅 {hours:.1f} 小时"
+                    f"（Testing 状态固定 7 天寿命）→ 尽快重授权: {RE_AUTH_CMD}",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"ℹ️ refresh token 剩余寿命 {hours/24:.1f} 天")
     else:
         error_msg = new_token.get("error", "未知")
         if error_msg == "invalid_grant":
-            die(f"刷新失败 ({error_msg}) — refresh token 已过期，需要重新 OAuth 授权")
+            die(
+                "刷新失败 (invalid_grant) — refresh token 已过期，需要重新 OAuth 授权: "
+                f"{RE_AUTH_CMD}"
+            )
         die(f"刷新失败: {error_msg}")
 
 

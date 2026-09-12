@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -67,6 +68,29 @@ class FeishuFetchTest(unittest.TestCase):
     def run_json(self, *extra, env=None, expect=0):
         rc, out, err = self.run_script("--json", *extra, env=env, expect=expect)
         return json.loads(out)
+
+    def run_no_out_dir(self, *extra, env=None, expect=0):
+        """同 run_script，但不传 --out-dir，用于验证默认路径解析。"""
+        cmd = [
+            sys.executable, str(SCRIPT),
+            "--chat-id", CHAT_ID,
+            "--state", str(self.state),
+        ] + list(extra)
+        run_env = os.environ.copy()
+        run_env["FEISHU_LARK_CLI"] = str(STUB)
+        if env:
+            run_env.update(env)
+        proc = subprocess.run(
+            cmd, cwd=str(self.tmp), env=run_env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        out = proc.stdout.decode("utf-8", "replace")
+        err = proc.stderr.decode("utf-8", "replace")
+        self.assertEqual(
+            proc.returncode, expect,
+            "exit=%d\nstdout=%s\nstderr=%s" % (proc.returncode, out, err),
+        )
+        return proc.returncode, out, err
 
     def read_state(self):
         with open(self.state, "r", encoding="utf-8") as fh:
@@ -163,6 +187,38 @@ class FeishuFetchTest(unittest.TestCase):
         self.assertIn(MEDIA_MID, downloaded_ids)
         self.assertTrue(
             (self.out_dir / ("%s_clip.MOV" % MEDIA_MID[-8:])).exists())
+
+    def test_08_yaml_inbox_root(self):
+        """未传 --out-dir 时，落盘根使用 feishu.yaml 的 inbox_root（支持 ~ 展开，拼 /YYYYMMDD）。
+
+        用临时 HOME 隔离，绝不触碰真实 ~/.hermes/youtube/feishu.yaml。
+        """
+        fake_home = self.tmp / "home"
+        yaml_dir = fake_home / ".hermes" / "youtube"
+        yaml_dir.mkdir(parents=True)
+        (yaml_dir / "feishu.yaml").write_text(
+            "default_chat_id: %s\ninbox_root: ~/yaml-inbox\n" % CHAT_ID,
+            encoding="utf-8",
+        )
+        rc, out, err = self.run_no_out_dir(
+            "--minutes", "30", "--json",
+            env={"HOME": str(fake_home)}, expect=0,
+        )
+        doc = json.loads(out)
+        self.assertTrue(doc["ok"])
+        self.assertEqual(len(doc["downloaded"]), 2)
+
+        date = datetime.now().strftime("%Y%m%d")
+        expected_root = fake_home / "yaml-inbox" / date
+        for item in doc["downloaded"]:
+            p = Path(item["path"])
+            self.assertTrue(p.exists())
+            self.assertEqual(p.parent, expected_root)
+            self.assertTrue(str(p).startswith(str(fake_home / "yaml-inbox")))
+
+        names = {p.name for p in expected_root.iterdir()}
+        self.assertIn("%s_Report-Final.pdf" % FILE_MID[-8:], names)
+        self.assertIn("%s_clip.MOV" % MEDIA_MID[-8:], names)
 
 
 if __name__ == "__main__":

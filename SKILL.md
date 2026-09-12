@@ -55,6 +55,14 @@ required_commands: [yt-dlp, ffmpeg, ffprobe, python3, node]
 
 批处理：`youtube_carry.sh --batch asmr url1 url2 url3` / `--batch --file urls.txt asmr`；混合模式需按模式分组多次调用。
 
+## 工作目录（统一布局 · 2026-09-12 落地 · 老板批准方案 A）
+
+- **业务工作区 `~/EasyIndie/`**（可见）：`inbox/`（原始素材；飞书直传落 `inbox/from-feishu/YYYYMMDD/`）→ `work/`（加工中 asset 包）→ `ready/`（待发布）→ `published/YYYY-MM/`（已发归档）；另有 `covers/`、`reports/{orzmc,hermes}/`、`docs/`
+- **凭据/台账/账号仍隐藏于 `~/.hermes/youtube/`**（**绝不进业务盘**）＋兼容软链 `inbox`→`~/EasyIndie/inbox`、`work`→`~/EasyIndie/work`（脚本按旧路径写入自动落到业务盘）
+- **默认路径优先级**：ingest = `--out-dir` > `$EASYINDIE_WORK` > `~/EasyIndie/work`；飞书兜底 = `--out-dir` > `$FEISHU_INBOX_ROOT` > `feishu.yaml:inbox_root` > `~/EasyIndie/inbox/from-feishu`
+- **`~/Downloads` 仅作中转站**（SMB 落点/浏览器下载），agent 临时文件一律 `/tmp`
+- 完整规范 + 家目录清理记录见 `references/workspace-layout.md`
+
 ## 标题偏好（按用户）
 
 - **老板**：`【ASMR】{简短标题}`（无时长前缀、无分隔符），如 `【ASMR】不良少女的深夜独白`；中文，给 5 个方案选择
@@ -113,6 +121,7 @@ python3 scripts/fetch_transcript.py "<URL>" [--text-only|--timestamps] [--langua
 | 文件 | 内容 |
 |:--|:--|
 | collaboration-setup.md | **多设备协作开启流程**（public 单仓库 + 占位符双向转换 bisync 模型；本技能近零真实值盘点；铁律 8 条） |
+| **workspace-layout.md** | **统一工作目录规范**（三层分离：`~/EasyIndie/` 业务盘 / `~/.hermes/youtube/` 凭据 / `/tmp` 临时区；路径优先级；素材生命周期；2026-09-12 家目录清理记录） |
 | **publishing-workflow-design.md** | **飞书自媒体发布工作流方案（v1 待拍板）**：现状诊断 6 痛点 / 五环节流程重建 / 发布卡片交互协议（回复语法表+状态机）/ 多账号 accounts 架构 / upload.sh v2（metaJSON 驱动+ledger.csv）/ 平台约束（100 上传·天·项目，配额按项目不按账号）/ A-B-C-D 方案对比与分期路线 |
 | **youtube-publish-workflow.md** | **发布操作手册**：卡片模板/回复语法/状态机/账号模型/台账/失败真因表/验收清单 + **实测坑 7 条**（categoryId 字符串、tags 索引延迟、playlistTitles 自动建列表…） |
 | **youtube-file-channel.md** | **飞书直传文件通道**：触发识别（`[Attachment: x]`）/处理 SOP/支持格式/附件上限实测位/超限替代通道（SMB、本机目录） |

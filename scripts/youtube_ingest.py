@@ -6,7 +6,7 @@
 典型来源：老板在飞书直接发视频/音频，Hermes 飞书适配器已把附件落盘为本地文件，
 再把本地路径交给本脚本。本脚本只做本地落盘 / 探针 / 加工 / 封面，绝不调用任何上传接口。
 
-产物（<out-dir>/<asset_id>/）：
+产物（默认 <out-dir>=~/EasyIndie/work，可被 --out-dir / $EASYINDIE_WORK 覆盖；结构 <out-dir>/<asset_id>/）：
     source.<ext>   入站文件的一份副本（不动原缓存文件）
     output.*       加工结果（raw/clip→output.mp4, asmr→output.webm, audio→output.mp3）
     cover.jpg      封面（源抽帧或黑底文字封面）
@@ -57,7 +57,7 @@ MEDIA_EXT = VIDEO_EXT | AUDIO_EXT
 
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("FFPROBE", "ffprobe")
-DEFAULT_OUT = os.path.join(os.path.expanduser("~"), ".hermes", "youtube", "inbox")
+DEFAULT_OUT = os.path.join(os.path.expanduser("~"), "EasyIndie", "work")
 MODE_CHOICES = ("auto", "raw", "asmr", "clip", "audio")
 
 
@@ -436,8 +436,8 @@ def build_parser():
                         help="入站文件路径，或包含媒体文件的目录")
     parser.add_argument("--mode", choices=MODE_CHOICES, default="auto",
                         help="加工模式（默认 auto：有视频流→raw，纯音频→audio）")
-    parser.add_argument("--out-dir", dest="out_dir", default=DEFAULT_OUT,
-                        help="素材根目录（默认 ~/.hermes/youtube/inbox）")
+    parser.add_argument("--out-dir", dest="out_dir", default=None,
+                        help="素材根目录（默认 $EASYINDIE_WORK 或 ~/EasyIndie/work）")
     parser.add_argument("--name", default=None, help="覆盖 asset slug（净化后使用）")
     parser.add_argument("--clip-start", dest="clip_start", default=None, help="截取起点 HH:MM:SS")
     parser.add_argument("--clip-end", dest="clip_end", default=None, help="截取终点 HH:MM:SS")
@@ -467,7 +467,10 @@ def main(argv=None):
     if not src.exists():
         sys.stderr.write("输入不存在: %s\n" % src)
         return EXIT_NOINPUT
-    out_root = Path(os.path.expanduser(args.out_dir))
+    # 优先级：CLI --out-dir > $EASYINDIE_WORK > 默认 ~/EasyIndie/work
+    out_root = Path(os.path.expanduser(
+        args.out_dir or os.environ.get("EASYINDIE_WORK") or DEFAULT_OUT
+    ))
     inputs = iter_inputs(src)
     if not inputs:
         sys.stderr.write("输入中没有可处理的媒体文件: %s\n" % src)

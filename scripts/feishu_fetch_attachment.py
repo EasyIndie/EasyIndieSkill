@@ -19,7 +19,7 @@
         [--chat-id oc_xxx]        # 参数 > FEISHU_CHAT_ID > ~/.hermes/youtube/feishu.yaml
         [--minutes 30]            # 扫描最近 N 分钟（默认 30）；--all 忽略时间窗
         [--limit 50]              # 最多拉取多少条消息
-        [--out-dir DIR]           # 默认 ~/.hermes/youtube/inbox/from-feishu/<YYYYMMDD>/
+        [--out-dir DIR]           # 默认 $FEISHU_INBOX_ROOT > feishu.yaml:inbox_root > ~/EasyIndie/inbox/from-feishu/<YYYYMMDD>/
         [--types file,media]      # 默认 file,media；可选 audio,image
         [--with-cover]            # media 消息额外下载封面图
         [--state FILE]            # 默认 ~/.hermes/youtube/feishu_fetched.json
@@ -53,7 +53,7 @@ DEFAULT_LIMIT = 50
 HOME = Path.home()
 FEISHU_YAML = HOME / ".hermes" / "youtube" / "feishu.yaml"
 DEFAULT_STATE = HOME / ".hermes" / "youtube" / "feishu_fetched.json"
-DEFAULT_INBOX = HOME / ".hermes" / "youtube" / "inbox" / "from-feishu"
+DEFAULT_INBOX = HOME / "EasyIndie" / "inbox" / "from-feishu"
 
 # 退出码
 EXIT_OK = 0
@@ -204,6 +204,27 @@ def read_default_chat_id(path=FEISHU_YAML):
                 key, _, val = line.partition(":")
                 key = key.strip().lower()
                 if key in ("default_chat_id", "chat_id"):
+                    val = val.strip().strip('"').strip("'")
+                    if val:
+                        return val
+    except OSError:
+        return None
+    return None
+
+
+def read_inbox_root(path=FEISHU_YAML):
+    """从运行时 feishu.yaml 读取 inbox_root（极简解析，仅标准库）。
+
+    返回原始字符串（可能含 ``~``），由调用方 expanduser；缺省时返回 None。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#") or ":" not in line:
+                    continue
+                key, _, val = line.partition(":")
+                if key.strip().lower() == "inbox_root":
                     val = val.strip().strip('"').strip("'")
                     if val:
                         return val
@@ -381,10 +402,17 @@ def main(argv=None):
         )
 
     # ---- 目录 ----
+    # 优先级：CLI --out-dir > $FEISHU_INBOX_ROOT > feishu.yaml:inbox_root > 默认
     if args.out_dir:
-        out_dir = Path(args.out_dir)
+        out_dir = Path(os.path.expanduser(args.out_dir))
     else:
-        out_dir = DEFAULT_INBOX / datetime.now().strftime("%Y%m%d")
+        inbox_root = (
+            os.environ.get("FEISHU_INBOX_ROOT")
+            or read_inbox_root()
+            or str(DEFAULT_INBOX)
+        )
+        out_dir = (Path(os.path.expanduser(inbox_root))
+                   / datetime.now().strftime("%Y%m%d"))
     state_path = Path(args.state) if args.state else DEFAULT_STATE
 
     # ---- 列消息 ----

@@ -126,6 +126,7 @@
 | **封面尺寸** | **按实际产物比例**推导：竖屏产物 → `1080×1920`；方形 → `1080×1080`；横屏产物 → `1080×720`；产物无视频流 → 回退源 → 默认 `1080×720`。源与产物比例不同向时**自动改文字封面**（warning 提示） |
 | **已定案不加** | ⚠️ **不为 asmr 模式加竖屏 9:16 黑帧支持**（老板 #1②）—— 要竖版 ASMR Shorts 需另立需求 |
 | **封面显示** | ⚠️ Shorts 自定义封面**不显示在 Shorts swipe feed**（feed 用自动帧），只在搜索/频道页/首页生效 —— 平台行为，非故障 |
+| ⚠️ **旋转矩阵坑** | 手机**竖拍**片常是 `1280x720` 码流 + `rotation=-90`（显示 720×1280 竖屏）。脚本的 `shorts` 判定只看码流宽高 → **错判「横屏 → 非 Shorts」**；而封面走 ffmpeg 抽帧（自动旋转）却是竖版 → 二者矛盾。**人工修正**：`ffprobe -v error -show_entries stream_side_data=rotation -of json <f>`，`±90/270` → 宽高对调后 1:1~9:16 即 Shorts。**实践验证（2026-09-12）**：竖拍片上传后 YouTube API `fileDetails.videoStreams` 回 `1280x720 rotation=clockwise`，`contentDetails.duration=PT1M8S` → 平台按竖屏、确实归为 Shorts |
 
 ## 5. 飞书消息附件大小上限（已实测，2026-09-12）
 

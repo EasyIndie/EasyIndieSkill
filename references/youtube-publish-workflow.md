@@ -185,6 +185,8 @@ python3 scripts/youtube_ledger.py summary --account <账号别名>
 | 8 | 台账 `duration` 列 | 上传层原本不写时长（ingest 探测结果与 upload 层解耦） | 已修：`youtube_upload.py` 未给 `--duration` 时**自动 ffprobe 探测**，写 1 位小数秒；探测失败只告警不阻断 |
 | 9 | 封面画布按「源」推导 | 竖屏源 + `asmr`（产物固定横屏 1920x1080）→ 封面算出竖版 1080×1920，**与产物比例错配**，YouTube 的 16:9 封面槽会把文字裁掉 | 已修：画布改为**按实际产物推导**（产物无视频流才回退源）；源与产物比例不同向时**自动改文字封面** + warning。实测 asmr 竖屏源 → 封面 1080×720 ✅ |
 | 10 | 横屏低分辨率源抽帧封面不放大 | 同向时抽帧保持原始宽高（如 640×360 → 封面 640×360）；YouTube 封面下限 640×360 可接受，但低分辨率源封面偏糊 | 已知限制（未改）：**建议源 ≥1080p**；若需强制规范到 1080 宽需另立需求 |
+| 11 | **旋转矩阵（竖屏手机片）误导 Shorts 判定** | 手机竖拍片存的是 `1280x720` 码流 + `side_data rotation=-90`，**显示为 720×1280 竖屏**。`youtube_ingest.py` 的 `shorts` 探测只看码流宽高 → 错判「横屏 16:9 → 非 Shorts」；而**封面模块**（ffmpeg 抽帧自动旋转）拿到的是竖版 → 两者矛盾。实锤：2026-09-12 上传 `U0PzpfdJQes`，YouTube API `fileDetails.videoStreams` 回 `1280x720 rotation=clockwise` → **平台确实按竖屏处理，就是 Shorts** | 出卡时**人工看旋转矩阵**：`ffprobe -v error -show_entries stream_side_data=rotation -of json <f>`，`±90/270` → 显示宽高对调、按竖屏算 Shorts；根治需给 ingest 的 shorts 探测加旋转感知（待派单修复） |
+| 12 | **账号品牌模板会污染非本类内容** | `account.yaml` 的 `default_playlists` / `tags_pool` / `title_template` / `description_template` **全是 ASMR 品牌**（含硬编码 `#asmr #助眠 #耳语`）。`--title` / `--description` 能覆盖模板，但 **tags 是「池 + 显式」合并**（`_norm_tags`）、**playlist 为空时回落账号默认** → 想发「非 ASMR」内容，光传 `--tags/--playlist` 去不掉 ASMR 标签、也进不了空列表（`--playlist ""` 会生成空标题列表，危险） | 临时做法（本次已用）：备份 `account.yaml` → 把 `default_playlists`/`tags_pool` 改 `[]` → 上传 → `\cp -f` 还原并用 `diff -q` 复核；**根治需加 `--no-playlist` / `--tags-pool none` 开关**（待派单修复） |
 
 ## 9. 可扩展点
 

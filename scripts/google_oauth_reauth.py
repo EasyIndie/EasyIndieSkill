@@ -6,21 +6,33 @@ google_oauth_reauth.py — 通用 Google OAuth 一键重授权（桌面应用 / 
 特点：纯标准库；自动备份旧 token；授权后立刻自测刷新；失败自动回滚。
 
 用法：
-    python3 google_oauth_reauth.py                 # 用下面默认值
-    OAUTH_PORT=18081 OAUTH_SCOPE="https://www.googleapis.com/auth/youtube.force-ssl" \
+    python3 google_oauth_reauth.py                       # 用默认值（双 scope）
+    python3 google_oauth_reauth.py --account my-chan     # token 落到账号目录
+    python3 google_oauth_reauth.py --dry-run             # 只打印路径/scope/授权 URL
+
+    OAUTH_PORT=18081 OAUTH_SCOPE="scope-a scope-b" \
     CLIENT_SECRETS_FILE=~/secrets/client.json TOKEN_FILE=~/secrets/token.json \
     python3 google_oauth_reauth.py
+
+参数：
+    --account NAME   使用账号档案：token 落 <accounts_dir>/<name>/request.token，
+                     凭据优先取档案 client_secrets（否则默认路径）
+    --scope "a b c"  覆盖作用域（空格分隔）
+    --dry-run        只打印将用的 scope / 路径 / 授权 URL 结构，不启动本地服务
 
 环境变量：
     CLIENT_SECRETS_FILE  OAuth 客户端凭据 json（兼容 installed / web 包装与扁平结构）
     TOKEN_FILE           写入新 token 的路径（旧文件会备份为 <TOKEN_FILE>.bak）
-    OAUTH_SCOPE          空格分隔的作用域；默认 youtube.force-ssl
+    OAUTH_SCOPE          空格分隔的作用域；默认见 DEFAULT_SCOPES
     OAUTH_PORT           本地回调端口，默认 18080（须与 Google 控制台登记的 redirect_uri 一致）
+
+默认同时申请：youtube.force-ssl + yt-analytics.readonly（一次授权给全，避免二次授权触发风控）。
 
 ⚠️ 只在「必须重授权」时跑（例如 invalid_grant / 首次授权 / Testing→Production 后换发长期 token），
    不要反复跑：重复 OAuth 可能触发 Google 风控。
 ⚠️ 浏览器必须与脚本在**同一台机器**上（回调是 http://localhost:<port>/）。
 """
+import argparse
 import json
 import os
 import sys
@@ -32,25 +44,24 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 HOME = os.path.expanduser("~")
-CLIENT_SECRETS_FILE = os.path.expanduser(
-    os.environ.get("CLIENT_SECRETS_FILE", f"{HOME}/.hermes/youtube/video_uploader.json")
-)
-TOKEN_FILE = os.path.expanduser(os.environ.get("TOKEN_FILE", f"{HOME}/.hermes/youtube/request.token"))
-SCOPE = os.environ.get("OAUTH_SCOPE", "https://www.googleapis.com/auth/youtube.force-ssl")
-PORT = int(os.environ.get("OAUTH_PORT", "18080"))
+DEFAULT_SCOPES = [
+    "https://www.googleapis.com/auth/youtube.force-ssl",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+]
+DEFAULT_SECRETS = os.path.join(HOME, ".hermes/youtube/video_uploader.json")
+DEFAULT_TOKEN = os.path.join(HOME, ".hermes/youtube/request.token")
 
-REDIRECT_URI = f"http://localhost:{PORT}/"
-TOKEN_URI = "https://oauth2.googleapis.com/token"
 AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
 
-if not os.path.exists(CLIENT_SECRETS_FILE):
-    sys.exit(f"❌ 凭据不存在: {CLIENT_SECRETS_FILE}")
-
-with open(CLIENT_SECRETS_FILE) as f:
-    raw = json.load(f)
-s = raw.get("installed") or raw.get("web") or raw
-CLIENT_ID, CLIENT_SECRET = s["client_id"], s["client_secret"]
-TOKEN_URI = s.get("token_uri", TOKEN_URI)
+# 以下全局在 main() 中按 参数/环境/账号档案 解析后赋值（Handler 会引用）
+CLIENT_SECRETS_FILE = DEFAULT_SECRETS
+TOKEN_FILE = DEFAULT_TOKEN
+SCOPE = " ".join(DEFAULT_SCOPES)
+PORT = int(os.environ.get("OAUTH_PORT", "18080"))
+REDIRECT_URI = f"http://localhost:{PORT}/"
+TOKEN_URI = "https://oauth2.googleapis.com/token"
+CLIENT_ID = ""
+CLIENT_SECRET = ""
 
 result = {}
 
@@ -125,19 +136,80 @@ def verify_refresh(td):
     return "✅ 刷新验证通过，且 refresh token 无过期时间（In production，长期有效）"
 
 
-if __name__ == "__main__":
-    if os.path.exists(TOKEN_FILE):
-        os.replace(TOKEN_FILE, TOKEN_FILE + ".bak")
-        print("ℹ️ 旧 token 已备份为 <TOKEN_FILE>.bak")
+def main(argv=None) -> int:
+    global CLIENT_SECRETS_FILE, TOKEN_FILE, SCOPE, PORT, REDIRECT_URI
+    global TOKEN_URI, CLIENT_ID, CLIENT_SECRET
+
+    ap = argparse.ArgumentParser(description="Google OAuth 一键重授权")
+    ap.add_argument("--account",
+                    help="账号名：token 落 accounts/<name>/request.token")
+    ap.add_argument("--scope", help='空格分隔 scope，如 "a b c"（默认双 scope）')
+    ap.add_argument("--dry-run", action="store_true",
+                    help="只打印路径/scope/授权 URL，不启动本地服务")
+    args = ap.parse_args(argv)
+
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    account = None
+    if args.account:
+        from lib import ytauto_accounts as accounts_mod
+        account = accounts_mod.load_account(args.account)
+
+    if os.environ.get("CLIENT_SECRETS_FILE"):
+        CLIENT_SECRETS_FILE = os.path.expanduser(os.environ["CLIENT_SECRETS_FILE"])
+    elif account is not None and account.client_secrets:
+        CLIENT_SECRETS_FILE = str(account.secrets_file)
+    else:
+        CLIENT_SECRETS_FILE = DEFAULT_SECRETS
+
+    if os.environ.get("TOKEN_FILE"):
+        TOKEN_FILE = os.path.expanduser(os.environ["TOKEN_FILE"])
+    elif account is not None:
+        TOKEN_FILE = str(account.token_file)
+    else:
+        TOKEN_FILE = DEFAULT_TOKEN
+
+    if args.scope:
+        SCOPE = args.scope
+    elif os.environ.get("OAUTH_SCOPE"):
+        SCOPE = os.environ["OAUTH_SCOPE"]
+    else:
+        SCOPE = " ".join(DEFAULT_SCOPES)
+
+    PORT = int(os.environ.get("OAUTH_PORT", "18080"))
+    REDIRECT_URI = f"http://localhost:{PORT}/"
+
+    if not os.path.exists(CLIENT_SECRETS_FILE):
+        sys.exit(f"❌ 凭据不存在: {CLIENT_SECRETS_FILE}")
+    with open(CLIENT_SECRETS_FILE) as f:
+        raw = json.load(f)
+    s = raw.get("installed") or raw.get("web") or raw
+    CLIENT_ID, CLIENT_SECRET = s["client_id"], s["client_secret"]
+    TOKEN_URI = s.get("token_uri", TOKEN_URI)
 
     params = urllib.parse.urlencode(dict(
         client_id=CLIENT_ID, redirect_uri=REDIRECT_URI, scope=SCOPE,
         response_type="code", access_type="offline", prompt="consent"))
+    auth_url = f"{AUTH_URI}?{params}"
+
+    if args.dry_run:
+        print(json.dumps(dict(
+            dry_run=True, account=args.account,
+            client_secrets=CLIENT_SECRETS_FILE, token_file=TOKEN_FILE,
+            scopes=SCOPE.split(), port=PORT, redirect_uri=REDIRECT_URI,
+            auth_url=auth_url,
+        ), ensure_ascii=False, indent=2))
+        return 0
+
+    if os.path.exists(TOKEN_FILE):
+        os.replace(TOKEN_FILE, TOKEN_FILE + ".bak")
+        print("ℹ️ 旧 token 已备份为 <TOKEN_FILE>.bak")
+
     print("=" * 70)
     print("1) 在浏览器打开下面的授权链接（prompt=consent 强制签发新 refresh token）:")
-    print(f"{AUTH_URI}?{params}")
+    print(auth_url)
     print("2) 用目标账号登录并点「允许」（未验证应用 → 高级 → 继续前往）")
     print(f"3) 必须在本机浏览器操作（回调 = {REDIRECT_URI}）；只点一次，避免触发风控")
+    print(f"   scope: {SCOPE}")
     print("=" * 70)
     sys.stdout.flush()
 
@@ -156,12 +228,18 @@ if __name__ == "__main__":
         if os.path.exists(TOKEN_FILE + ".bak"):
             os.replace(TOKEN_FILE + ".bak", TOKEN_FILE)
             print("ℹ️ 已回滚旧 token")
-        sys.exit(1)
+        return 1
 
     td = result.get("token")
     if not td:
-        sys.exit("❌ 未收到授权码，token 未保存")
+        print("❌ 未收到授权码，token 未保存")
+        return 1
     print(f"✅ 新 token 已保存: {TOKEN_FILE}")
     print(f"   scope : {td.get('scope', '?')}")
     print(f"   expiry: {td.get('expiry', '?')}")
     print(verify_refresh(td))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -102,6 +102,7 @@ python3 scripts/fetch_transcript.py "<URL>" [--text-only|--timestamps] [--langua
 | 文件 | 内容 |
 |:--|:--|
 | collaboration-setup.md | **多设备协作开启流程**（public 单仓库 + 占位符双向转换 bisync 模型；本技能近零真实值盘点；铁律 8 条） |
+| **publishing-workflow-design.md** | **飞书自媒体发布工作流方案（v1 待拍板）**：现状诊断 6 痛点 / 五环节流程重建 / 发布卡片交互协议（回复语法表+状态机）/ 多账号 accounts 架构 / upload.sh v2（metaJSON 驱动+ledger.csv）/ 平台约束（100 上传·天·项目，配额按项目不按账号）/ A-B-C-D 方案对比与分期路线 |
 | youtube-asmr-audio-format.md | Opus 48kHz / VP9 黑帧 / -c:a copy 技术背景 |
 | youtube-audio-analysis.md | 音频内容分析（静音检测/类型判定/元数据） |
 | youtube-oauth-token-exchange.md | OAuth 授权码手动交换流程 |

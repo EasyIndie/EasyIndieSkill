@@ -9,9 +9,16 @@ More reliable than the bash equivalent (youtube_token_refresh.sh) on macOS:
 
 Usage:
     python3 ~/.hermes/skills/media/easyindie/scripts/youtube_token_refresh.py
+    python3 ~/.hermes/skills/media/easyindie/scripts/youtube_token_refresh.py --all-accounts
 
 Environment:
     YOUTUBE_DIR  — override default ($HOME/.hermes/youtube)
+    TOKEN_FILE   — override token path（默认 $YOUTUBE_DIR/request.token）
+    SECRETS_FILE — override secrets path（默认 $YOUTUBE_DIR/video_uploader.json）
+
+v3 (2026-09-12):
+- 新增 --all-accounts：遍历账号目录下每个账号的 request.token 逐个刷新，
+  输出每个账号的结果 JSON。不加参数时行为与旧版完全一致。
 
 Returns:
     exit 0 + "✅ Token refreshed" on success
@@ -24,8 +31,10 @@ v2 (2026-09-12):
 - 每次成功刷新后打印 refresh token 剩余寿命，<24h 提前告警（避免再次静默死亡）
 """
 
+import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -34,8 +43,11 @@ import urllib.request
 from datetime import datetime, timezone
 
 YOUTUBE_DIR = os.environ.get("YOUTUBE_DIR", os.path.expanduser("~/.hermes/youtube"))
-TOKEN_FILE = os.path.join(YOUTUBE_DIR, "request.token")
-SECRETS_FILE = os.path.join(YOUTUBE_DIR, "video_uploader.json")
+# TOKEN_FILE / SECRETS_FILE 支持环境覆盖（--all-accounts 逐账号刷新时复用单账号逻辑）
+TOKEN_FILE = os.path.expanduser(
+    os.environ.get("TOKEN_FILE") or os.path.join(YOUTUBE_DIR, "request.token"))
+SECRETS_FILE = os.path.expanduser(
+    os.environ.get("SECRETS_FILE") or os.path.join(YOUTUBE_DIR, "video_uploader.json"))
 
 RE_AUTH_CMD = "python3 ~/.hermes/youtube/re_auth_youtube.py"
 
@@ -161,5 +173,39 @@ def main() -> None:
         die(f"刷新失败: {error_msg}")
 
 
+def refresh_all_accounts() -> int:
+    """遍历账号目录，逐账号以子进程复用单账号刷新逻辑，输出结果 JSON。"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from lib import ytauto_accounts as accounts_mod
+
+    results = []
+    for acct in accounts_mod.list_accounts():
+        env = dict(os.environ)
+        env["TOKEN_FILE"] = str(acct.token_file)
+        env["SECRETS_FILE"] = str(acct.secrets_file)
+        proc = subprocess.run(
+            [sys.executable, os.path.abspath(__file__)],
+            capture_output=True, text=True, env=env,
+        )
+        results.append(dict(
+            account=acct.name,
+            ok=proc.returncode == 0,
+            exit_code=proc.returncode,
+            token_file=str(acct.token_file),
+            output=(proc.stdout or "").strip(),
+            error=(proc.stderr or "").strip() or None,
+        ))
+    payload = dict(ok=all(r["ok"] for r in results),
+                   count=len(results), accounts=results)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if payload["ok"] else 1
+
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("--all-accounts", action="store_true",
+                        help="遍历账号目录逐个刷新 token")
+    _args = parser.parse_args()
+    if _args.all_accounts:
+        sys.exit(refresh_all_accounts())
     main()

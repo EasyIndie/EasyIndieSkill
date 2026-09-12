@@ -1,0 +1,18 @@
+# ytauto 账号档案模板 —— 由 `youtube_accounts.py init <name>` 渲染生成。
+# 仅结构/占位，不含真实凭据。真实 token/凭据放在运行时目录 ~/.hermes/youtube/。
+name: $name
+display: $display
+channel_id: ""
+client_secrets: ""
+token_path: ""
+default_privacy: unlisted
+default_language: zh
+default_category: 24
+default_playlists: []
+tags_pool: []
+title_template: ""
+description_template: ""
+doc_status: test
+daily_publish_cap: 3
+extra: {}
+

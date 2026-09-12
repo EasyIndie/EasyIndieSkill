@@ -61,13 +61,24 @@ required_commands: [yt-dlp, ffmpeg, ffprobe, python3, node]
 - **zhulongyixian**：`【ASMR】{N}分钟{核心内容} · {修饰/副标题}`；中文，5 个方案
 - 音频特征分析（静音段/音量判断有无语音）：`ffprobe` + `ffmpeg silencedetect`
 
-## 上传与 OAuth
+## 上传与 OAuth（v2 · 多账号 + 台账，2026-09-12 起）
 
 ```bash
-source scripts/common/upload.sh && upload_video <file> "<title>" "<desc>" [privacy]
-# ⚠️ 直接调 youtubeuploader 必须加 -cache "$HOME/.hermes/youtube/request.token"
-# OAuth scope 限制：youtube.upload 只能上传不能改隐私；初始授权用 youtube.force-ssl
+# 主入口：metaJSON 驱动（标题/描述/标签/播放列表/封面/定时发布/分类/语言 一次带全）
+python3 scripts/youtube_upload.py --account amazing-archive --file <f> \
+  --title "【ASMR】xxx" --hook "深夜耳语" --summary "<描述正文>" \
+  --keywords "asmr,助眠" --tags "额外标签" --thumbnail <cover.jpg> \
+  [--playlist "ASMR 深夜"] [--publish-at 2026-09-13T12:00:00+08:00] [--dry-run] [--json]
+
+# 旧签名仍可用（向后兼容）：source scripts/common/upload.sh && upload_video <f> "<title>" "<desc>" [privacy]
+python3 scripts/youtube_accounts.py list|show <name>|init <name>|migrate   # 账号档案
+python3 scripts/youtube_ledger.py show|find|count-today|summary            # 台账
+python3 scripts/youtube_ingest.py --in <file>                              # 飞书直传文件通道
 ```
+
+- 账号档案：`~/.hermes/youtube/accounts/<name>/account.yaml`（频道ID/默认隐私/播放列表/tags 池/标题模板/日更上限）；token 同目录 `request.token`
+- 台账：`~/.hermes/youtube/ledger.csv`（21 列，含源链接/视频ID/状态/触发人）
+- ⚠️ 真实调 youtubeuploader 必须带 `-cache <账号 token>`；metaJSON 的 `categoryId` **必须是字符串**（数字会被工具拒绝）
 
 - **token 刷新**：`python3 scripts/google_token_refresh.py`（**通用硬化版**：单独捕获 HTTPError 读响应体报真因 / refresh token 寿命 <24h 告警 / Production 判定）或本项目专用 `scripts/youtube_token_refresh.py`（与 cron 实际执行副本 `~/.hermes/scripts/youtube_token_refresh.py` 同源）
 - **一键重授权**：`python3 scripts/google_oauth_reauth.py`（**通用模板**，env 参数化）／本项目 `python3 ~/.hermes/youtube/re_auth_youtube.py`（打印 URL → 浏览器授权 → 自动换 token）
@@ -103,6 +114,8 @@ python3 scripts/fetch_transcript.py "<URL>" [--text-only|--timestamps] [--langua
 |:--|:--|
 | collaboration-setup.md | **多设备协作开启流程**（public 单仓库 + 占位符双向转换 bisync 模型；本技能近零真实值盘点；铁律 8 条） |
 | **publishing-workflow-design.md** | **飞书自媒体发布工作流方案（v1 待拍板）**：现状诊断 6 痛点 / 五环节流程重建 / 发布卡片交互协议（回复语法表+状态机）/ 多账号 accounts 架构 / upload.sh v2（metaJSON 驱动+ledger.csv）/ 平台约束（100 上传·天·项目，配额按项目不按账号）/ A-B-C-D 方案对比与分期路线 |
+| **youtube-publish-workflow.md** | **发布操作手册**：卡片模板/回复语法/状态机/账号模型/台账/失败真因表/验收清单 + **实测坑 7 条**（categoryId 字符串、tags 索引延迟、playlistTitles 自动建列表…） |
+| **youtube-file-channel.md** | **飞书直传文件通道**：触发识别（`[Attachment: x]`）/处理 SOP/支持格式/附件上限实测位/超限替代通道（SMB、本机目录） |
 | youtube-asmr-audio-format.md | Opus 48kHz / VP9 黑帧 / -c:a copy 技术背景 |
 | youtube-audio-analysis.md | 音频内容分析（静音检测/类型判定/元数据） |
 | youtube-oauth-token-exchange.md | OAuth 授权码手动交换流程 |
@@ -118,6 +131,12 @@ python3 scripts/fetch_transcript.py "<URL>" [--text-only|--timestamps] [--langua
 
 | 脚本 | 用途 |
 |:--|:--|
+| **feishu_fetch_attachment.py** | **飞书漏抓附件兜底**：扫最近消息 → 发现未落盘附件（含 >100MB，SDK 下不动的）→ lark-cli 下载 + 封面 + 幂等状态（chat_id 取自 `~/.hermes/youtube/feishu.yaml`，不入仓库） |
+| **youtube_upload.py** | **上传主入口（v2）**：metaJSON 驱动 + 多账号 + 台账 + 日更风控 + dry-run + JSON 回执 |
+| **youtube_accounts.py** | 账号管理：list/show/init/migrate（旧 token 迁移 + 兼容软链） |
+| **youtube_ledger.py** | 台账查询：show/find/count-today/summary |
+| **youtube_ingest.py** | **飞书直传文件通道**：落盘 inbox + ffprobe 探针 + 加工（raw/asmr/clip/audio）+ 封面（黑帧自动转文字封面） |
+| **lib/ytauto_*.py** | `ytauto_accounts`（档案+极简 YAML 兜底）/ `ytauto_ledger`（CSV+文件锁）/ `ytauto_meta`（metaJSON 构造+Go 类型契约校验）/ `imaging`（Pillow 封面+黑帧判定） |
 | youtube_carry.sh | 搬运入口（4 模式 + 批处理） |
 | processors/asmr|raw|clip|audio.sh | 各模式处理 |
 | common/download|info|init|upload.sh | 共享（下载/信息/初始化/上传） |

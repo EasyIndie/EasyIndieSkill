@@ -9,7 +9,7 @@
         [--playlist 名字 ...] [--playlist-id ID ...] \
         [--privacy unlisted] [--publish-at ISO8601] [--category-id N] [--language zh] \
         [--thumbnail PATH] [--caption PATH] \
-        [--mode asmr|raw|clip|audio] [--source-url URL] [--source-title S] \
+        [--mode asmr|raw|clip|audio] [--duration SECONDS] [--source-url URL] [--source-title S] \
         [--summary S] [--hook S] [--keywords S] \
         [--account-auto] [--force] [--dry-run] [--json] [--operator NAME]
 
@@ -62,6 +62,36 @@ def resolve_uploader() -> str:
     if found:
         return found
     return os.path.expanduser("~/go/bin/youtubeuploader")
+
+
+def probe_duration(path: Path, timeout: float = 15.0) -> Optional[float]:
+    """用 ffprobe 探测媒体时长（秒）。任何失败都返回 None（绝不抛错、绝不阻断上传）。"""
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        val = float((proc.stdout or "").strip())
+    except (TypeError, ValueError):
+        return None
+    if val <= 0:
+        return None
+    return val
+
+
+def _fmt_duration(seconds: Optional[float]) -> str:
+    """台账 duration 列：稳定可解析，保留 1 位小数；无值 → 空字符串。"""
+    if seconds is None:
+        return ""
+    return "%.1f" % seconds
 
 
 def classify_error(text: str) -> Tuple[str, str]:
@@ -163,6 +193,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--thumbnail")
     p.add_argument("--caption")
     p.add_argument("--mode", choices=["asmr", "raw", "clip", "audio"])
+    p.add_argument("--duration", type=float,
+                   help="视频时长（秒），如 754.2；缺省时用 ffprobe 自动探测")
     p.add_argument("--source-url")
     p.add_argument("--source-title")
     p.add_argument("--summary")
@@ -280,6 +312,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     receipt["playlists"] = meta.get("playlistTitles", []) or []
     receipt["tags_count"] = len(meta.get("tags", []) or [])
 
+    # 5. 时长：优先 --duration；否则 ffprobe 自动探测。探测失败只告警，不阻断上传。
+    if args.duration is not None:
+        duration_seconds: Optional[float] = float(args.duration)
+    else:
+        duration_seconds = probe_duration(fpath)
+        if duration_seconds is None:
+            warnings.append(
+                "未能自动探测 duration（ffprobe 不可用 / 非媒体文件 / 超时），台账 duration 留空")
+    receipt["duration"] = (
+        round(duration_seconds, 3) if duration_seconds is not None else None)
+    receipt["warnings"] = warnings
+
     # 写临时 metaJSON
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     tmpdir = A.youtube_dir() / "tmp"
@@ -304,7 +348,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         size_mb = round(fpath.stat().st_size / 1048576.0, 2)
         est_row = dict(
             account=account.name, channel=account.channel_id, title=meta.get("title"),
-            source_url=args.source_url or "", mode=args.mode or "", size_mb=size_mb,
+            source_url=args.source_url or "", mode=args.mode or "",
+            duration=_fmt_duration(duration_seconds), size_mb=size_mb,
             privacy=meta.get("privacyStatus"), publish_at=meta.get("publishAt") or "",
             playlists=";".join(meta.get("playlistTitles", []) or []),
             tags_count=len(meta.get("tags", []) or []), thumbnail=args.thumbnail or "",
@@ -378,7 +423,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         source_url=args.source_url or "",
         source_title=args.source_title or "",
         mode=args.mode or "",
-        duration="",
+        duration=_fmt_duration(duration_seconds),
         size_mb=size_mb,
         privacy=meta.get("privacyStatus") or "",
         publish_at=meta.get("publishAt") or "",

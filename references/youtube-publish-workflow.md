@@ -157,7 +157,20 @@ python3 scripts/youtube_ledger.py summary --account <账号别名>
 5. **删除测试视频**：验收完成后删除该测试视频，并在台账补记/更新状态，避免污染统计。
 6. **回归**：确认没有对生产账号 `live` 误发 `public`。
 
-## 8. 可扩展点
+## 8. 实测坑（2026-09-12 一期真实验收，必读）
+
+| # | 坑 | 真相 | 处置 |
+|:--|:--|:--|:--|
+| 1 | metaJSON 的 `categoryId` | youtubeuploader 的 Go `VideoMeta.CategoryId` 是 **string**；传数字 → `json: cannot unmarshal number ...` 直接 exit 5（未产生视频） | 我们的 `build_meta` 已统一输出字符串 `"24"`；`validate_go_meta_types()` 会拦截 |
+| 2 | 文字封面 | **本机 ffmpeg 8.1.1 无 freetype/libass** → 没有 `drawtext`/`subtitles` 滤镜，文本渲染必挂 | 封面改用 **Pillow**（`lib/imaging.py`）；黑帧视频自动切文字封面 |
+| 3 | `videos.list` 查不到 tags | 上传响应（`-metaJSONout`）里 tags 齐全，但 `videos.list` 可能返回 `tags: None` —— YouTube **索引延迟**（实测约 30s，改 public 后 30s 出现；改回 unlisted 仍可见） | **别误判为失败**：以 `-metaJSONout` / 上传响应为准；核验脚本可先等待或改 public 试探 |
+| 4 | `playlistTitles` | 目标列表**不存在时会自动创建**（源码 `AddVideoToPlaylist`：按标题查找→找不到就 `Playlists.Insert`） | 档案里直接写列表名即可，无需手动建列表 |
+| 5 | 频道统计 `videoCount` | 上传后立即查可能仍显示旧值（索引/统计延迟） | 以 `videos.list` + 播放列表成员为准 |
+| 6 | 日更额度口径 | `failed` / `dry-run` 行**不占**日更额度 | `count_today` 只统计 `published`/`scheduled`；`include_failed=True` 可显式计入 |
+| 7 | 自定义封面核验 | YouTube 会把 1080×720 封面转成 1280×720 | 无法靠 hash 比对；用「亮像素占比」判定（文字封面 ≈0.6–0.7%，纯黑抽帧 ≈0） |
+| 8 | 台账 `duration` 列 | 上传层原本不写时长（ingest 探测结果与 upload 层解耦） | 已修：`youtube_upload.py` 未给 `--duration` 时**自动 ffprobe 探测**，写 1 位小数秒；探测失败只告警不阻断 |
+
+## 9. 可扩展点
 
 ### 多账号扩展 SOP（3 步）
 

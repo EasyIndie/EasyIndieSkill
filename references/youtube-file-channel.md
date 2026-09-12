@@ -93,13 +93,49 @@
 - 音频：`mp3` / `m4a` / `wav` / `flac` / `ogg`（以及 `aac/opus/wma`）。
   - `wav`/`flac` 体积大，长音频建议先自行压成 `m4a`/`mp3` 再发，或直接用 `--mode audio` 输出 192k MP3。
 
-## 5. 飞书消息附件大小上限（重要）
+## 5. 飞书消息附件大小上限（已实测，2026-09-12）
 
-- **首次实测记录位（待填）**：
-  > 待实测：老板首次发大文件时记录实际可传上限与失败提示。
-  > 记录项建议：文件大小、扩展名、飞书报错/无反应、是否收到 `[Attachment: ...]`、落盘路径与大小是否一致。
-- 未实测前，**默认按保守估计处理**：单个附件过大时，飞书客户端可能直接拒发或长时间卡在上传，
-  Hermes 侧则可能收不到附件（无 `[Attachment: ...]`）。遇到这种情况先看下一节「超限替代通道」。
+### 5.1 机器人上传（bot → 用户，出站）＝ **30 MB 硬上限**
+
+用递增体积真实刷新二分测试（bot 身份，同一 DM）：
+
+| 消息类型 | 30 MB | 31 MB | 35 MB | 40/45 MB | 50 MB | 100 MB |
+|:--|:--:|:--:|:--:|:--:|:--:|:--:|
+| 文件消息（`--file`） | ✅ 体积过（仅类型校验拦假文件） | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 视频消息（`--video`+`--video-cover`） | ✅ 发送成功 | — | — | ❌ | — | — |
+
+- 失败错误码统一为 **234006 `The file size exceed the max value.`**
+- **结论：文件消息与视频消息共用同一上传限制（30 MB）——「改发文件消息」绕不过去**（2026-09-12 老板提议，已实测否决）
+- 假文件（全零 `.mp4`）会先在体积之后被**类型校验**拦下（错误码 **230055** `The type of file upload does not match...`）→ 可作为「体积已通过」的判定信号
+
+### 5.2 机器人下载附件（入站，老板发给我）＝ **>100 MB 必然下载失败**（2026-09-12 实锤）
+
+同一批文件、同一个 bot 身份，两条下载实现对比：
+
+| 下载实现 | 0.33 MB | 30 MB | **106 MB** |
+|:--|:--:|:--:|:--:|
+| Hermes 用的 `lark_oapi` SDK（`message_resource.get` 一次性下载） | ✅ | ✅ | ❌ **234037 `Downloaded file size exceeds limit.`** |
+| `lark-cli im +messages-resources-download --type file`（同 bot 身份） | ✅ | ✅ | ✅ **成功（111,556,409 字节）** |
+
+**推论与现象**：
+
+- 老板用客户端发 **9.1 GB** 都没问题（客户端侧几乎无小上限）——但**机器人侧下载 >100 MB 会被平台拒绝**：文件「看得见、拿不到」。
+- Hermes 适配器下载失败**只记 DEBUG 日志**、不产出任何提示 → 表现为**「消息是空的、附件凭空消失」**（日志：`Inbound dm message received: type=document text='' media=0`）。**这是"附件丢失"的头号真因**（不是消息类型问题）。
+- 即使下载成功，Hermes 也是**整块读入内存**（`_read_binary_response` → `bytes(file_obj.read())`，无流式、无上限保护）→ 百 MB 级尚可，多 GB 会拖垮 16 GB 机器。
+
+### 5.2.1 素材大小 → 通道选择（工作流约定）
+
+| 素材大小 | 推荐通道 | 理由 |
+|:--|:--|:--|
+| ≤ 100 MB | 飞书直传（老板直接发） | Hermes 可自动下载 |
+| **> 100 MB** | **① agent 用 lark-cli 手动取（SOP 见 6.2）② 或 SMB「下载」共享 / 本机目录** | SDK 下载必失败；lark-cli 实测 106 MB 成功 |
+| 多 GB | SMB / 本机目录（优先） | 省飞书上传时间，零内存风险 |
+| 有链接 | 链接通道（yt-dlp） | 不占飞书带宽 |
+
+### 5.3 lark-cli 媒体参数路径坑（2026-09-12 实测）
+
+`--file` / `--video` / `--video-cover` / `--image` 只接受 **cwd 相对路径**、`file_xxx` key 或 URL；
+**传绝对路径会直接 exit 2（CLI 用法错误，不是 API 拒绝）** → 先把文件 `\cp -f` 到当前目录，再用 `./name` 引用。
 
 ### 超限替代通道（附件发不出来时）
 
@@ -109,7 +145,100 @@
    agent 按上面的「本机目录投递」处理。
 3. 若文件本身是网络可访问的链接，可改走**链接通道**（通道 1）。
 
-## 6. 常见失败与处置
+## 6. ⚠️ 视频消息 vs 文件消息（2026-09-12 实测 + 一处误判更正）
+
+飞书客户端发视频会走**两种消息类型**：
+
+| 消息类型 | 飞书行为 | 我们拿到的 | 处置 |
+|:--|:--|:--|:--|
+| **视频消息**（`msg_type=media`） | 可能转码，**也可能原样保留**（实测本例未转码） | 取决于平台处理 | 下载后**用 A/B 比对法**判定（6.1），**不要凭 metadata 猜** |
+| **文件消息**（`msg_type=file`） | 原文件直传（字节级一致） | 原片 | 直接用 ✅ |
+
+**大视频客户端会自动转成文件消息发送**（老板实测），大文件反而更容易拿到原片。
+
+### 6.1 「是否原片」的正确判定：A/B 比对（❌ 不要凭 metadata 猜）
+
+⚠️ **更正（2026-09-12，我此前误判过并让老板白白重发一次）**：曾用「`encoder=Lavf*` + `major_brand=isom` + 无 Apple 元数据 + `description=miaojian`」四要素判定视频"被飞书转码"，**这是错的**——这些特征来自**源文件本身**：该文件是**秒剪（MiaoJian）导出**产物（文件名 `MJ_` 前缀印证），秒剪导出天然就是 FFmpeg 编码 + isom 容器 + `miaojian` 签名。**metadata 无法区分「应用导出」与「平台转码」。**
+
+**可靠方法 = 同一文件分别用「视频消息」与「文件消息」各发一次，下载后比对 MD5/大小：**
+
+```bash
+lark-cli im +messages-resources-download --message-id <media_msg> --file-key <fk1> --type file --output a.MOV
+lark-cli im +messages-resources-download --message-id <file_msg>  --file-key <fk2> --type file --output b.MOV
+md5 a.MOV b.MOV        # 一致 = 视频消息未转码，即原片
+```
+
+**2026-09-12 实况**：老板先发视频消息、再发文件消息 → 两者 **MD5 完全一致**（`76caa6a6…`，111,556,409 字节）→ **飞书未转码，视频消息拿到的就是原片**。
+
+**次优方法（没有文件消息对照时）**：向老板索要源文件大小/分辨率，与我们下载到的 `ffprobe` 规格（size/bitrate/分辨率/时长）**逐项对照**；确有差异才提示「请改发文件消息重发」。
+
+### 6.2 「附件收不到」的真因与兜底 SOP
+
+真因**不是**消息类型，而是 **>100 MB 下载被平台拒绝（234037）+ 失败静默**（详见 5.2）。**空消息 = 附件下载失败的典型表现**。
+
+**兜底 SOP（已实测跑通，2026-09-12）**：
+
+**首选：一条命令自动兜底**（推荐，收到空消息就先跑它）
+```bash
+cd <skill dir> && python3 scripts/feishu_fetch_attachment.py --minutes 30 --with-cover
+# 默认 chat_id 取自 ~/.hermes/youtube/feishu.yaml 的 default_chat_id（真实值不入公开仓库）
+# 输出：✅ 下载 xxx（106.4MB）→ 路径 ; 汇总: scanned=50 found=2 downloaded=2 skipped=0 failed=0
+# 幂等：已抓过的消息再次运行会 skipped（状态文件 ~/.hermes/youtube/feishu_fetched.json）
+```
+实测：2 条附件（含 106MB 视频）+ 1 张封面，**23 秒**全部落盘到 `~/.hermes/youtube/inbox/from-feishu/<YYYYMMDD>/`。
+
+**手动兜底（脚本不可用时）**：
+```bash
+# 1) 拿到 message_id 与 file_key（content 形如 <file key="file_v3_..." name="x.MOV"/>）
+lark-cli im +chat-messages-list --chat-id <chat_id> --order desc --page-size 30 --format json
+# 2) lark-cli 下载（⚠️ 一律用 --type file；type=video/media 不存在 → 234001）
+cd <目录> && lark-cli im +messages-resources-download \
+  --message-id om_xxx --file-key file_v3_xxx --type file --output boss_video.MOV
+# 3) 原片判定（6.1）→ 再进 youtube_ingest.py 走流水线
+```
+
+- 视频消息的**封面图**也能下载（`cover_image_key`，`--type image`），可作缩略图素材（脚本 `--with-cover` 已内置）。
+- 上游改进建议（可选）：① 下载失败改记 WARNING 并在消息里标注「附件下载失败：超过 100MB」而不是静默空消息；② 改用分块/Range 下载；③ 加大小上限 + 流式落盘。本地核心保持跟踪上游、勿分叉。
+
+### 6.1 视频消息里的「非原片」判定（四要素，命中任一即为转码）
+
+| # | 检查 | 原片（iPhone/相机） | 飞书转码版 |
+|:--|:--|:--|:--|
+| ① | `format.tags.encoder` | 硬件编码器标识（如 `com.apple.*`/机型名） | **`Lavf58.20.100`**（FFmpeg 二次编码） |
+| ② | `format.tags.major_brand` | **`qt`**（QuickTime） | **`isom`**（`isomiso2avc1mp41`） |
+| ③ | Apple/QuickTime 元数据 | 有 `com.apple.quicktime.model`/`creationdate`/`location` | **全部被剥（0 条）** |
+| ④ | `format.tags.description` | 无 | **`miaojian`**（秒剪 / 飞书系转码器签名） |
+
+一条命令：
+```bash
+ffprobe -v error -show_format -of json <file> | grep -E "encoder|major_brand|description|apple"
+```
+2026-09-12 实测样本：老板发的 `MJ_1771310428.MOV`（90s）→ 四项全中（106 MB / 1920×1080 / 9.96 Mbps）→ **判定为转码版，已提示老板改发文件消息**。
+
+### 6.2 ⚠️ Hermes 侧已知问题：视频消息**收不到**（需手动下载兜底）
+
+日志实锤（2026-09-12 15:25:28）：
+
+```
+[Feishu] Received raw message type=media message_id=om_...
+[Feishu] Inbound dm message received: ... type=document ... text='' media=0
+```
+
+→ Hermes 飞书适配器对 `msg_type=media` **没有产出 media_ref / 没有下载**，消息以**空文本**进入会话（还会触发「empty non-content message」自愈告警）。**text 通道也拿不到内容**，等于消息丢失。
+
+**兜底 SOP（当前唯一可行路径）**：
+```bash
+# 1) 找消息与 file_key（content 形如 <video key="file_v3_..." name="x.MOV" duration="90s"/>）
+lark-cli im +chat-messages-list --chat-id <chat_id> --order desc --page-size 30 --format json
+# 2) 用 type=file 下载（⚠️ 视频消息必须用 type=file；type=video 不存在）
+cd <某个目录> && lark-cli im +messages-resources-download \
+  --message-id om_xxx --file-key file_v3_xxx --type file --output boss_video.MOV
+# 3) 转码判定（6.1 四要素）→ 再决定是否要求重发
+```
+- 备用：视频消息的**封面图**也能下载（`cover_image_key`，`--type image`），可作缩略图素材。
+- 建议：向上游报 issue「Feishu adapter drops msg_type=media (empty text, media=0)」。本地核心保持跟踪上游、勿分叉。
+
+## 7. 常见失败与处置
 
 | 现象 | 可能真因 | 处置 |
 | --- | --- | --- |

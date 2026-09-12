@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -369,7 +370,7 @@ class UploadE2ETest(Base):
     REQUIRED_KEYS = {
         "ok", "exit_code", "account", "channel", "video_id", "url", "privacy",
         "publish_at", "playlists", "tags_count", "thumbnail", "ledger_row",
-        "warnings", "error",
+        "warnings", "error", "duration",
     }
 
     def setUp(self):
@@ -384,6 +385,20 @@ class UploadE2ETest(Base):
                "--file", str(self.video), "--json"] + list(extra)
         return subprocess.run(cmd, capture_output=True, text=True,
                               env=env if env is not None else self.sub_env())
+
+    def run_upload_file(self, path, *extra, env=None):
+        cmd = [sys.executable, str(UPLOAD_PY), "--account", "acct1",
+               "--file", str(path), "--json"] + list(extra)
+        return subprocess.run(cmd, capture_output=True, text=True,
+                              env=env if env is not None else self.sub_env())
+
+    def make_media(self, seconds=1.0):
+        out = self.tmp / "real.mp4"
+        cmd = ["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+               "-i", "testsrc=duration=%s:size=64x64:rate=5" % seconds,
+               "-pix_fmt", "yuv420p", str(out)]
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return out
 
     def test_dry_run_no_upload_no_ledger(self):
         p = self.run_upload("--title", "Dry", "--dry-run")
@@ -460,6 +475,42 @@ class UploadE2ETest(Base):
                "--file", str(self.video), "--title", "T", "--json"]
         r = subprocess.run(cmd, capture_output=True, text=True, env=self.sub_env())
         self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+
+    def test_duration_explicit_writes_ledger_and_receipt(self):
+        p = self.run_upload("--title", "Dur", "--duration", "12.5")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        obj = json.loads(p.stdout)
+        self.assertAlmostEqual(float(obj["duration"]), 12.5, places=3)
+        rows = list(L.iter_rows())
+        self.assertEqual(len(rows), 1)
+        self.assertAlmostEqual(float(rows[0]["duration"]), 12.5, places=3)
+
+    def test_duration_autoprobe_from_real_media(self):
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            self.skipTest("ffmpeg/ffprobe 不可用")
+        video = self.make_media(1.0)
+        p = self.run_upload_file(video, "--title", "Auto")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        obj = json.loads(p.stdout)
+        self.assertIsNotNone(obj["duration"])
+        self.assertAlmostEqual(float(obj["duration"]), 1.0, delta=0.35)
+        rows = list(L.iter_rows())
+        self.assertEqual(len(rows), 1)
+        self.assertAlmostEqual(float(rows[0]["duration"]), 1.0, delta=0.35)
+
+    def test_duration_non_media_warns_blank_and_still_uploads(self):
+        fake = self.tmp / "fake_video.mp4"
+        fake.write_bytes(b"this is definitely not a media file\n" * 64)
+        p = self.run_upload_file(fake, "--title", "Junk")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        obj = json.loads(p.stdout)
+        self.assertTrue(obj["ok"])
+        self.assertIsNone(obj["duration"])
+        self.assertTrue(any("duration" in w for w in obj["warnings"]), obj["warnings"])
+        rows = list(L.iter_rows())
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["duration"], "")
+        self.assertEqual(rows[0]["status"], "published")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 # 飞书自媒体视频上传工作流 · 业务流程梳理 + 发布流程优化方案
 
-> 提案版本 v1 · 2026-09-12 · 状态：**待老板拍板**
+> 版本 v1.1 · 2026-09-12 · 状态：**一期已实现并通过真实上传验收**（老板已批准 #1–#8 全部建议）
+> **一期验收结论与实测坑见「附录 D」**（categoryId 必须字符串 / ffmpeg 无 drawtext / tags 索引延迟 / playlistTitles 自动建列表）
 > 决策依据：#1 测试号 = Amazing Archive（后续扩展多账号）、#2 增强 upload.sh（播放列表/tags/缩略图/台账）、#3 不做无人值守上传（保持人工确认标题）、#4 旧 broadcast token 已删
 
 ---
@@ -402,3 +403,45 @@ column -s, -t ~/.hermes/youtube/ledger.csv | tail -20
 |:--|:--|
 | #4 旧 broadcast token | ✅ 已移出活跃目录 → `~/.hermes/youtube/retired/request_broad.token.dead-20260912`（含 evidence 副本），活跃目录仅剩 `request.token` |
 | 受影响文档 | `references/youtube-cron-mode-gfw-diagnostics.md` 第 8 节仍提 backup token → 一期一并更新为多账号模型 |
+
+---
+
+## 附录 D · 一期验收实录（2026-09-12）
+
+### D.1 交付物
+
+| 类型 | 文件 |
+|:--|:--|
+| 上传核心 | `scripts/youtube_upload.py`、`scripts/lib/ytauto_accounts.py`、`ytauto_ledger.py`、`ytauto_meta.py` |
+| 账号/台账 CLI | `scripts/youtube_accounts.py`、`scripts/youtube_ledger.py`、`scripts/templates/account.yaml.template` |
+| 文件通道 | `scripts/youtube_ingest.py`、`scripts/lib/imaging.py` |
+| 测试 | `scripts/tests/test_ytauto.py`（含桩上传器离线 E2E）、`scripts/tests/test_ingest.py`、`scripts/tests/stubs/fake_youtubeuploader.sh` |
+| 文档 | 本文件、`youtube-publish-workflow.md`、`youtube-file-channel.md` |
+
+### D.2 验收证据（真实环境，非桩）
+
+| 步骤 | 结果 |
+|:--|:--|
+| 离线测试 | **48/48 全绿**（`python3 -m unittest discover -s scripts/tests -t .`） |
+| token 迁移 | ✅ `request.token` → `accounts/amazing-archive/request.token` + 兼容软链；刷新自检通过 |
+| 账号档案 | ✅ 真实档案生效（Amazing Archive / unlisted / 播放列表「ASMR 深夜」/ 9 标签池 / 日更上限 3） |
+| 文件通道 | ✅ 20s 测试视频 → inbox 落盘 + 探针 + raw 加工 + **黑帧识别→文字封面 1080×720** |
+| dry-run | ✅ 生成 metaJSON（11 标签/播放列表/中文描述）+ 打印完整命令，不落台账 |
+| **真实上传** | ✅ **`C3o7-akU_B0`**（unlisted，16 秒完成，台账第 2 行） |
+| API 独立核验 | ✅ 标题/描述（中文+hashtags）/分类 24/语言 zh/隐私 unlisted/上传状态 processed |
+| 播放列表 | ✅ 「ASMR 深夜」**被工具自动创建**（`PLQ2O9aKEGFoc`）且视频已在其中 |
+| 标签 | ✅ 11 个（asmr/助眠/耳语/白噪音/放松/深夜/沉浸/睡眠/无人声/自动化/验收）——`videos.list` 初次读为 None 属索引延迟 |
+| 封面 | ✅ YouTube 缩略图亮像素占比 0.61% ≈ 文字封面 0.72%（纯黑抽帧应为 0）→ 自定义封面上传生效 |
+
+### D.3 本期踩到并已修复的真 bug（子代理两次自报「完成」均被验收打回）
+
+1. **本机 ffmpeg 无 freetype** → `drawtext` 滤镜不存在，文字封面必挂 → 改用 Pillow + 黑帧自动判定。
+2. **metaJSON `categoryId` 必须字符串**（Go 结构体 `CategoryId string`）→ `build_meta` 统一归一为字符串 + 新增 Go 类型契约校验闸门。
+
+### D.4 待办（二期）
+
+- 飞书附件大小上限实测记录（老板首次发大文件时补）+ 超限走 SMB/本机目录
+- 飞书交互卡片按钮实测（B 方案）：发测试卡 → 点击 → 确认合成命令链路
+- 源频道清单与「新视频候选池」巡检（`playlistItems.list` 省配额）
+- `yt-analytics.readonly` 数据回采（scope 已纳入重授权默认申请清单）
+- 多账号扩展：新账号授权一次给全 scope → 建档案 → 5 秒测试上传验证

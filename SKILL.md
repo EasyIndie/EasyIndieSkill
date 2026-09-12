@@ -62,6 +62,7 @@ required_commands: [yt-dlp, ffmpeg, ffprobe, python3, node]
 - **默认路径优先级**：ingest = `--out-dir` > `$EASYINDIE_WORK` > `~/EasyIndie/work`；飞书兜底 = `--out-dir` > `$FEISHU_INBOX_ROOT` > `feishu.yaml:inbox_root` > `~/EasyIndie/inbox/from-feishu`
 - **`~/Downloads` 仅作中转站**（SMB 落点/浏览器下载），agent 临时文件一律 `/tmp`
 - 完整规范 + 家目录清理记录见 `references/workspace-layout.md`
+- **素材清理**：`python3 scripts/asset_gc.py`（work/ 30 天 LRU + 磁盘水位兜底；安全门禁：仅删「`^\d{8}-\d{4}-` 且含 `asset.json`」的目录；无删除且磁盘充足时静默 exit 0）→ Hermes cron `easyindie 素材清理`（no_agent，每天 **04:30**，脚本副本 `~/.hermes/scripts/easyindie_asset_gc.py`，与技能版 md5 同源）
 
 ## 标题偏好（按用户）
 
@@ -115,6 +116,8 @@ python3 scripts/fetch_transcript.py "<URL>" [--text-only|--timestamps] [--langua
 - **youtubeuploader 不在 PATH**：`~/go/bin/`，upload.sh 有 fallback
 - **write_file 安全扫描器**：写含 `$HOME`/`$(...)`/凭证的脚本可能被 `...` 遮蔽——写入后用 patch 修复
 - **curl 退出码诊断**：28=超时（GFW 最常见）/ 7=连接拒绝 / 22=HTTP 错误 / 0=成功（详见 `references/youtube-diagnostics.md`）
+- **Hermes 终端两条门禁**（2026-09-12 实测）：① 命令里带 `$(...)` 命令替换的巨型 one-liner 会被 hardline 拦（"command parser limit"）→ 改成先 `write_file` 一个 `.sh` 再 `bash 它`；② 调用**有删除能力**的脚本（即使只加 `--dry-run`）会触发**审批门禁**，老板不点确认则超时 BLOCKED → 验证前先跟老板说明，或只做 `py_compile`/`--help` 这类无副作用检查
+- **subagent（pi）自报不算数**：必须 Hermes 亲自复跑测试 + 真实 dry-run 复验后才算交付
 
 ## 知识体系索引（references/）
 
@@ -155,6 +158,7 @@ python3 scripts/fetch_transcript.py "<URL>" [--text-only|--timestamps] [--langua
 | （政策站页面）| **不预置模板文件**：需要时按 `references/google-oauth-production.md` 第 2 节「页面骨架规格」**现场生成** index/privacy/terms + 样式（2026-09-12 老板决策：技能库不存页面文件）|
 | oauth_server.py | OAuth 回调服务器（注意 video_uploader.json 无 installed 层的 bug） |
 | fetch_transcript.py | 字幕抓取（内容创作） |
+| **asset_gc.py** | **素材定时清理**（work/ 30 天 LRU + 磁盘水位兜底；安全门禁仅删含 `asset.json` 的 asset 目录；静默契约；cron 副本 `~/.hermes/scripts/easyindie_asset_gc.py`，每天 04:30） |
 
 ## 验证
 - `ls scripts/` 看到全部脚本 + `yt-dlp --version` / `ffmpeg -version` 可用

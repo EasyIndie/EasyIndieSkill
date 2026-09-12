@@ -59,6 +59,24 @@ inbox（原始）
 | 100 MB – 1 GB | `feishu_fetch_attachment.py` 兜底 或 SMB「下载」共享 |
 | >1 GB / 多 GB | SMB「下载」共享 或本机目录（零内存风险） |
 
+### 清理策略（`scripts/asset_gc.py` · 每天 04:30 cron）
+
+只清理 `work/`（`inbox/`、`ready/`、`published/`、`covers/`、`reports/`、`docs/` **永不自动删**）。默认 30 天 LRU：目录 mtime 早于 `now - 30d` 才删；磁盘可用低于水位时进入压力模式，忽略 30 天限制、最旧优先清到目标水位。
+
+| 参数 | 默认 | 说明 |
+|:--|:--|:--|
+| `--days N` | `30` | LRU 保留天数（按 asset 目录 mtime 判定） |
+| `--root DIR` | `$EASYINDIE_WORK` > `~/EasyIndie/work` | 工作目录 |
+| `--min-free-gb X` | `5` | 可用空间低于 X GiB 触发磁盘压力模式 |
+| `--target-free-gb Y` | `10` | 压力模式清到可用 ≥ Y GiB 为止 |
+| `--dry-run` | off | 只报告不删 |
+| `--json` | off | 机器可读输出（`deleted` / `freed_bytes` / `skipped_unsafe` / `free_gb`） |
+| `--keep NAME` | — | 白名单目录名（精确匹配），可重复，永不删 |
+
+**安全门禁（硬约束）**：仅当直接子目录名匹配 `^\d{8}-\d{4}-`（asset_id 形如 `YYYYMMDD-HHMM-<slug>`）**且**目录内含 `asset.json` 时才允许删除；否则一律跳过并计入 `skipped_unsafe`。因此即使 `--root` 误指到 `inbox/`/`ready/`/`published/` 等，也不会误删。命中的兄弟目录名额外列入保护集。删除用 `shutil.rmtree`，报告每个目录名与释放字节。
+
+**输出契约**：无删除且磁盘充足 → stdout 完全为空、exit 0（cron 静默）；有删除 → `🧹 素材清理：删除 N 个（释放 …）｜ 可用 …` + 逐条明细；压力模式无论是否删除都输出（含清理前后可用空间）；磁盘紧张但无可清理项 → ⚠️ 告警行，仍 exit 0（避免 cron 误报脚本故障）。
+
 ## 四、家目录清理记录（2026-09-12）
 
 | 项 | 体积 | 处置 | 依据 |

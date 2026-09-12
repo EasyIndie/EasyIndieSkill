@@ -40,7 +40,7 @@ required_commands: [yt-dlp, ffmpeg, ffprobe, python3, node]
 
 ## 搬运处理流程
 
-1. ✅ 检查磁盘空间（<500MB 则 LRU 删旧文件，全删仍不足 → DISK_ALERT 立即通知用户）
+1. ✅ 检查磁盘空间（紧张时先跑 `python3 scripts/asset_gc.py` 按 30 天 LRU 兜底清理，再进入压力模式；仍不足 → DISK_ALERT 立即通知用户）
 2. 提取视频信息（标题、时长）→ 告知用户
 3. 运行入口脚本下载+处理：`bash scripts/youtube_carry.sh <mode> <url> [clip-opts]`
 4. 根据音频特征建议标题/描述 → 用户确认
@@ -161,6 +161,7 @@ python3 scripts/fetch_transcript.py "<URL>" [--text-only|--timestamps] [--langua
 | **asset_gc.py** | **素材定时清理**（work/ 30 天 LRU + 磁盘水位兜底；安全门禁仅删含 `asset.json` 的 asset 目录；静默契约；cron 副本 `~/.hermes/scripts/easyindie_asset_gc.py`，每天 04:30） |
 
 ## 验证
+- **全量测试基线：`python3 -m unittest discover -s scripts/tests -t .` → 69 tests OK（2026-09-12）**；任何脚本改动后必须复跑且 ≥基线（编码 agent 自报不算数，Hermes 亲自跑）
 - `ls scripts/` 看到全部脚本 + `yt-dlp --version` / `ffmpeg -version` 可用
 - token：`python3 -c "import json; d=json.load(open('$HOME/.hermes/youtube/request.token')); print(d.get('refresh_token_expires_in'))"`
 - 上传后 YouTube Studio 可见视频

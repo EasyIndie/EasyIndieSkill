@@ -1,7 +1,7 @@
 ---
 name: easyindie
 description: "EasyIndie 内容自动化统一技能（多领域扩展）：YouTube 搬运/内容创作（当前），后续按领域扩展 audio/video/ai-music 等。"
-version: 1.0.1
+version: 1.0.2
 author: Hermes Agent
 tags: [youtube, video, audio, content, automation, upload, oauth]
 platforms: [macos, linux]
@@ -14,14 +14,14 @@ required_commands: [yt-dlp, ffmpeg, ffprobe, python3, node]
 >
 > | 领域 | 触发 | 知识 | 脚本 |
 > |:--|:--|:--|:--|
-> | **youtube**（当前） | YouTube 链接 / 搬运 / 字幕转内容 / OAuth | `references/youtube-*.md` | `scripts/youtube_*.sh/py`、`scripts/processors/` |
+> | **youtube**（当前） | YouTube 链接 / 搬运 / 字幕转内容 / **OAuth 授权·发布·故障诊断** | `references/youtube-*.md`、**`references/google-oauth-production.md`**、`references/public-site-pages.md` | `scripts/youtube_*.sh/py`、**`scripts/google_*.py`**、`scripts/processors/` |
 > | （后续）audio | 音频处理/生成 | `references/audio-*.md` | `scripts/audio/` |
 > | （后续）video | 短视频剪辑 | `references/video-*.md` | `scripts/video/` |
 
 ## 使用时机
 - 用户发 YouTube 链接（搬运：默认 asmr 模式；或指定 raw/clip/audio）
 - 用户要总结/转写/再创作视频内容（字幕 → 摘要/推文/博客）
-- YouTube OAuth token 授权/刷新/故障诊断
+- YouTube OAuth token 授权/刷新/故障诊断、**OAuth 应用 Testing→Production 发布与品牌验证**（政策站/首页/隐私政策）
 - 后续领域（音频/视频/AI 音乐）触发条件在此追加
 
 ---
@@ -69,11 +69,11 @@ source scripts/common/upload.sh && upload_video <file> "<title>" "<desc>" [priva
 # OAuth scope 限制：youtube.upload 只能上传不能改隐私；初始授权用 youtube.force-ssl
 ```
 
-- **token 刷新（推荐 Python 版）**：`python3 scripts/youtube_token_refresh.py`（macOS 上 bash 版有引用脆弱性）
-- **一键重授权**：`python3 ~/.hermes/youtube/re_auth_youtube.py`（打印 URL → 浏览器授权 → 自动换 token）
+- **token 刷新**：`python3 scripts/google_token_refresh.py`（**通用硬化版**：单独捕获 HTTPError 读响应体报真因 / refresh token 寿命 <24h 告警 / Production 判定）或本项目专用 `scripts/youtube_token_refresh.py`（与 cron 实际执行副本 `~/.hermes/scripts/youtube_token_refresh.py` 同源）
+- **一键重授权**：`python3 scripts/google_oauth_reauth.py`（**通用模板**，env 参数化）／本项目 `python3 ~/.hermes/youtube/re_auth_youtube.py`（打印 URL → 浏览器授权 → 自动换 token）
 - **GFW 网络限制**：Google OAuth 端点不可达时设 `HTTPS_PROXY` 或远程刷新 token 传回
-- **Refresh token 生命周期**：`refresh_token_expires_in` ≈ 2.7 天——cron 连续 3 天刷新失败则必须重新完整授权
-- cron 建议：每 6h 刷新（`0 */6 * * *`，deliver local）
+- **Refresh token 生命周期（2026-09-12 重要更正）**：`refresh_token_expires_in` 是**剩余倒计时**，不是总寿命；应用处于 **Testing** 时总寿命恒为 **7 天（604800s）** —— 早期文档写的「≈2.7 天」是把剩余值误当成寿命。**2026-09-12 已发布 In production → 刷新响应中该字段消失，refresh token 长期有效，不再需要周期性重授权**。完整根因/政策站/品牌验证流程见 `references/google-oauth-production.md`
+- cron 建议：每 6h 刷新（`0 */6 * * *`）；**`deliver` 必须为 `origin`**（历史上 `local` 导致 6 次失败静默 3 周无人知晓）
 
 ## 内容创作（字幕 → 内容）
 
@@ -105,7 +105,8 @@ python3 scripts/fetch_transcript.py "<URL>" [--text-only|--timestamps] [--langua
 | youtube-asmr-audio-format.md | Opus 48kHz / VP9 黑帧 / -c:a copy 技术背景 |
 | youtube-audio-analysis.md | 音频内容分析（静音检测/类型判定/元数据） |
 | youtube-oauth-token-exchange.md | OAuth 授权码手动交换流程 |
-| youtube-refresh-token-expiry-detection.md | Refresh token 生命周期/耗尽检测/网络隔离 |
+| youtube-refresh-token-expiry-detection.md | Refresh token 生命周期/耗尽检测/网络隔离（**2026-09-12 已更正为 7 天说 + 根因定论 + 品牌验证踩坑**） |
+| **google-oauth-production.md** | **Google OAuth 应用 Testing→Production 全流程（原独立技能合并）**：7 天根因诊断/脚本加固/政策站搭建（GitHub Pages+自有域灰云）/Search Console 验证/新版 Auth Platform 发布路径/品牌验证 findings 修法表/唯一一次重授权闭环/假性打不开等坑 |
 | youtube-cron-mode-gfw-diagnostics.md | Cron 模式 GFW 诊断（区分安全限制/网络/永久过期） |
 | youtube-curl-exit-codes.md | curl 退出码速查 |
 | youtube-install-notes.md | 安装说明 |
@@ -119,7 +120,10 @@ python3 scripts/fetch_transcript.py "<URL>" [--text-only|--timestamps] [--langua
 | youtube_carry.sh | 搬运入口（4 模式 + 批处理） |
 | processors/asmr|raw|clip|audio.sh | 各模式处理 |
 | common/download|info|init|upload.sh | 共享（下载/信息/初始化/上传） |
-| youtube_token_refresh.py/.sh | token 刷新（推荐 .py） |
+| youtube_token_refresh.py/.sh | token 刷新（本项目专用；.py 与 cron 副本同源，推荐 .py） |
+| **google_token_refresh.py** | **通用硬化版 token 刷新**（HTTPError 读响应体报真因 / invalid_grant 给根因与修法 / 寿命 <24h 告警 / Production 判定；env: TOKEN_FILE·CLIENT_SECRETS_FILE·YOUTUBE_DIR；可作 cron no_agent 脚本） |
+| **google_oauth_reauth.py** | **通用一键重授权**（env: CLIENT_SECRETS_FILE·TOKEN_FILE·OAUTH_SCOPE·OAUTH_PORT；自动备份/回滚 + 授权后自测刷新 + Production 判定） |
+| （政策站页面）| **不预置模板文件**：需要时按 `references/google-oauth-production.md` 第 2 节「页面骨架规格」**现场生成** index/privacy/terms + 样式（2026-09-12 老板决策：技能库不存页面文件）|
 | oauth_server.py | OAuth 回调服务器（注意 video_uploader.json 无 installed 层的 bug） |
 | fetch_transcript.py | 字幕抓取（内容创作） |
 

@@ -21,7 +21,7 @@
 
 ### 永久修复控制台操作路径（新版 Google Auth Platform UI，2026-09-12 实查）
 
-- **项目**：`videouploader-500608`（client_id 前缀 `5787735111-`）
+- **项目**：`<GCP 项目 ID>`（为公开镜像脱敏；真实值 = 本机 `~/.hermes/youtube/video_uploader.json` 里 client_id 所属项目，client_id 数字前缀 + `-` 开头）
 - 旧链接 `console.cloud.google.com/apis/credentials/consent` 会**自动跳转**到新版
   **Google Auth Platform → Overview 概览页**，而**概览页没有发布按钮** → 常见「找不到 Publish app」的原因。
 - 发布按钮在两处之一：
@@ -41,6 +41,8 @@
 
 
 
+### 两种修法
+
 | 方案 | 操作 | 效果 |
 |:--|:--|:--|
 | ⭐ 永久修复（推荐） | Google Cloud Console → APIs & Services → OAuth consent screen → **Publishing status: In production** | refresh token **不再过期**，一次性授权真正常驻（未验证应用仅显示警告页，个人自用无碍） |
@@ -53,6 +55,23 @@
   （旧版把 `HTTPError` 当 `URLError` 处理，只打印 `HTTP Error 400`，看日志根本看不出 `invalid_grant` —— 连续 6 次失败都因此无法定位。）
 - `invalid_grant` 分支直接输出根因 + 重授权命令 + 永久修复路径。
 - 每次刷新成功后打印 refresh token 剩余寿命，**<24h 提前告警**（避免再次静默死亡）。
+
+### 发布时的「品牌验证」要求（2026-09-12 实测踩坑，必读）
+
+点 **Publish app** 时 Google 会自动做 branding 检查，常见两条 finding：
+
+| Finding | 真正含义 | 修法 |
+|:--|:--|:--|
+| 首页网址「未注册到您的名下」 | 需在 **Search Console** 验证首页所属域；检查是**异步快照**——若验证晚于上次检查，报错会滞留 | ① 直接**重试 Publish**（Search Console 验证是后补的）；② 仍报 → 追加**网址前缀(URL-prefix)属性** `https://<域名>/`（HTML 文件方式最稳，把验证文件推上 Pages 即可） |
+| 应用名称与首页上的名称不一致 | Google 要求 **console 的 App name 必须能在首页上被识别** | 两处用**同一个字符串**：console App name 改成与首页主标题一致（如 `EasyIndie Uploader`），并把该名称写进首页 `<title>` + `<h1>` + 正文 |
+
+**官方首页要求**（support.google.com/cloud/answer/13807376；该站直连会被本机 fake-ip 判成私有地址 → 用 `curl -o` + `textutil -convert txt -stdout` 读）：
+① 准确代表品牌；② 完整描述功能；③ 透明说明为何需要 Google 用户数据；④ 托管在**你拥有的已验证域**
+（不能是 Google Sites/Facebook 等第三方平台）；⑤ 首页含**隐私政策链接**且与 consent screen 填的一致；
+⑥ 无需登录即可见。
+
+⚠️ 该检查**异步**（提交后分钟~小时才有结论）。品牌检查未过不影响 OAuth 授权本身，但
+**顺序必须「先发布成功、再重授权」** —— 否则 Testing 状态下重授权只能拿到 7 天 token。
 
 ## Session Context
 

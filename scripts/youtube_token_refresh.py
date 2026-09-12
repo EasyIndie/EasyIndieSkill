@@ -149,6 +149,8 @@ def main() -> None:
                 )
             else:
                 print(f"ℹ️ refresh token 剩余寿命 {hours/24:.1f} 天")
+        else:
+            print("ℹ️ refresh token 无过期时间（应用 In production，长期有效）")
     else:
         error_msg = new_token.get("error", "未知")
         if error_msg == "invalid_grant":

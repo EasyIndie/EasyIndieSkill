@@ -1,7 +1,7 @@
 ---
 name: easyindie
 description: "EasyIndie 内容自动化统一技能（多领域扩展）：YouTube 搬运/内容创作（当前），后续按领域扩展 audio/video/ai-music 等。"
-version: 1.0.2
+version: 1.1.0
 author: Hermes Agent
 tags: [youtube, video, audio, content, automation, upload, oauth]
 platforms: [macos, linux]
@@ -118,6 +118,8 @@ python3 scripts/fetch_transcript.py "<URL>" [--text-only|--timestamps] [--langua
 - **curl 退出码诊断**：28=超时（GFW 最常见）/ 7=连接拒绝 / 22=HTTP 错误 / 0=成功（详见 `references/youtube-diagnostics.md`）
 - **Hermes 终端两条门禁**（2026-09-12 实测）：① 命令里带 `$(...)` 命令替换的巨型 one-liner 会被 hardline 拦（"command parser limit"）→ 改成先 `write_file` 一个 `.sh` 再 `bash 它`；② 调用**有删除能力**的脚本（即使只加 `--dry-run`）会触发**审批门禁**，老板不点确认则超时 BLOCKED → 验证前先跟老板说明，或只做 `py_compile`/`--help` 这类无副作用检查
 - **subagent（pi）自报不算数**：必须 Hermes 亲自复跑测试 + 真实 dry-run 复验后才算交付
+- **飞书文件消息无 caption**（文件与文字只能两条独立消息）→ **说明后置到卡片**，零前置文字依赖：附件照常处理，模式默认 `auto`，其余字段全在发布卡片上回改（**零指令协议**详见 `references/youtube-file-channel.md` §3.5；老板 2026-09-12 决策：不加黑帧自动 asmr、不用文件名前缀、默认隐私 unlisted）
+- **YouTube Shorts 支持**（2026-09-12）：判定 = **方形/竖屏（`w ≤ h`，1:1~9:16）+ ≤180s**，API 无专门参数；`raw`/`clip` 可出 Shorts，**`asmr` 产物固定横屏 1920x1080 → 必然不是 Shorts**（老板 #1② 已定案不加竖屏黑帧）；识别结果落 `asset.json` 的 **`shorts`** 键 + 摘要 `📱 SHORTS`；封面按**实际产物比例**自动取 1080×1920 / 1080×1080 / 1080×720（源与产物比例不同向 → 自动改文字封面），详见 `references/youtube-publish-workflow.md` §1 Shorts 规则表
 
 ## 知识体系索引（references/）
 
@@ -161,7 +163,7 @@ python3 scripts/fetch_transcript.py "<URL>" [--text-only|--timestamps] [--langua
 | **asset_gc.py** | **素材定时清理**（work/ 30 天 LRU + 磁盘水位兜底；安全门禁仅删含 `asset.json` 的 asset 目录；静默契约；cron 副本 `~/.hermes/scripts/easyindie_asset_gc.py`，每天 04:30） |
 
 ## 验证
-- **全量测试基线：`python3 -m unittest discover -s scripts/tests -t .` → 69 tests OK（2026-09-12）**；任何脚本改动后必须复跑且 ≥基线（编码 agent 自报不算数，Hermes 亲自跑）
+- **全量测试基线：`python3 -m unittest discover -s scripts/tests -t .` → 80 tests OK（2026-09-12，Shorts 识别 + 封面画布按产物）**；任何脚本改动后必须复跑且 ≥基线（编码 agent 自报不算数，Hermes 亲自跑）
 - `ls scripts/` 看到全部脚本 + `yt-dlp --version` / `ffmpeg -version` 可用
 - token：`python3 -c "import json; d=json.load(open('$HOME/.hermes/youtube/request.token')); print(d.get('refresh_token_expires_in'))"`
 - 上传后 YouTube Studio 可见视频

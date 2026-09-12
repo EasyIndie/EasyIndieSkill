@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -25,6 +26,13 @@ try:
     import imaging
 except ImportError:  # pragma: no cover
     imaging = None
+
+try:  # 直接加载模块以单测 shorts_info（不跑 main）
+    _spec = importlib.util.spec_from_file_location("youtube_ingest", INGEST)
+    ingest = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(ingest)
+except Exception:  # pragma: no cover
+    ingest = None
 
 HAVE_FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 REQUIRED_FIELDS = [
@@ -145,6 +153,140 @@ class IngestTests(unittest.TestCase):
         """磁盘不足（--min-free-mb 取极大值）→ 退出码 6。"""
         res = self._run(self.video, "--min-free-mb", "1000000000", "--json")
         self.assertEqual(res.returncode, 6, res.stderr.decode("utf-8", "replace")[-500:])
+
+    # ---------------- 竖屏/方形封面 + Shorts 判定（新增） ----------------
+
+    def _make_video(self, size, duration=1):
+        """用 lavfi 合成指定尺寸的黑帧视频（含音频），返回路径。"""
+        path = self.dir / ("v_%s_%s.mp4" % (size.replace("x", "_"), duration))
+        res = _ffmpeg([
+            "-f", "lavfi", "-i", "color=c=black:s=%s:d=%s:r=1" % (size, duration),
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=%s" % duration,
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            "-shortest", str(path),
+        ])
+        self.assertEqual(res.returncode, 0, res.stderr.decode("utf-8", "replace")[-500:])
+        return path
+
+    def _cover_size(self, video):
+        """对给定视频生成文字封面并返回其 (width, height)。"""
+        cover = self.dir / ("cover_%s.jpg" % Path(video).stem)
+        result = imaging.ensure_cover(str(video), str(cover), mode="raw", at_sec=0.0)
+        self.assertTrue(Path(result).exists())
+        streams = _probe_json(cover).get("streams", [])
+        video_streams = [s for s in streams if s.get("codec_type") == "video"]
+        self.assertTrue(video_streams)
+        return (video_streams[0].get("width"), video_streams[0].get("height"))
+
+    def _make_test_pattern(self, size, duration=1):
+        """用 lavfi testsrc2 合成指定尺寸的**非黑帧彩色**视频，返回路径。"""
+        path = self.dir / ("p_%s.mp4" % size.replace("x", "_"))
+        res = _ffmpeg([
+            "-f", "lavfi", "-i", "testsrc2=s=%s:d=%s:r=10" % (size, duration),
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(path),
+        ])
+        self.assertEqual(res.returncode, 0, res.stderr.decode("utf-8", "replace")[-500:])
+        return path
+
+    def _image_size(self, image):
+        """返回图片的 (width, height)。"""
+        streams = _probe_json(image).get("streams", [])
+        video_streams = [s for s in streams if s.get("codec_type") == "video"]
+        self.assertTrue(video_streams)
+        return (video_streams[0].get("width"), video_streams[0].get("height"))
+
+    def test_detect_canvas_unit(self):
+        """detect_canvas 按宽高比返回竖屏/方形/横屏画布，非法参数回退横屏。"""
+        self.assertEqual(imaging.detect_canvas(1920, 1080), (1080, 720))
+        self.assertEqual(imaging.detect_canvas(1080, 1920), (1080, 1920))
+        self.assertEqual(imaging.detect_canvas(1080, 1080), (1080, 1080))
+        self.assertEqual(imaging.detect_canvas(None, None), (1080, 720))
+
+    def test_portrait_text_cover_1080x1920(self):
+        """竖屏黑帧视频 → 文字封面画布 1080x1920。"""
+        video = self._make_video("320x568")
+        self.assertEqual(self._cover_size(video), (1080, 1920))
+
+    def test_square_text_cover_1080x1080(self):
+        """方形黑帧视频 → 文字封面画布 1080x1080。"""
+        video = self._make_video("320x320")
+        self.assertEqual(self._cover_size(video), (1080, 1080))
+
+    def test_horizontal_text_cover_1080x720(self):
+        """横屏黑帧视频 → 文字封面画布 1080x720（防回归）。"""
+        self.assertEqual(self._cover_size(self.video), (1080, 720))
+
+    def test_portrait_source_landscape_canvas_uses_text_cover(self):
+        """显式横屏画布 + 竖屏非黑帧源 → 比例不一致，改用文字封面 1080x720。"""
+        video = self._make_test_pattern("360x640")
+        cover = self.dir / "mismatch_cover.jpg"
+        warnings = []
+        result = imaging.ensure_cover(
+            str(video), str(cover), mode="asmr", at_sec=0.0,
+            size=(1080, 720), warnings=warnings,
+        )
+        self.assertTrue(Path(result).exists())
+        self.assertGreater(Path(result).stat().st_size, 1024)
+        self.assertEqual(self._image_size(cover), (1080, 720))
+        self.assertTrue(
+            any("比例不一致" in w for w in warnings),
+            "warnings 应包含比例不一致提示: %r" % (warnings,),
+        )
+
+    def test_portrait_source_portrait_canvas_extracts_frame(self):
+        """显式竖屏画布 + 竖屏非黑帧源 → 同向走抽帧，尺寸 1080x1920。"""
+        video = self._make_test_pattern("360x640")
+        cover = self.dir / "portrait_extract_cover.jpg"
+        warnings = []
+        result = imaging.ensure_cover(
+            str(video), str(cover), mode="raw", at_sec=0.0,
+            size=(1080, 1920), warnings=warnings,
+        )
+        self.assertTrue(Path(result).exists())
+        self.assertEqual(self._image_size(cover), (1080, 1920))
+        self.assertFalse(
+            any("比例不一致" in w for w in warnings),
+            "同向不应触发比例不一致提示: %r" % (warnings,),
+        )
+
+    def test_shorts_info_portrait_eligible(self):
+        """竖屏 60s → eligible True，aspect 化简为 9:16。"""
+        video = self._make_video("540x960", duration=60)
+        info = ingest.shorts_info(str(video))
+        self.assertTrue(info["eligible"])
+        self.assertEqual(info["aspect"], "9:16")
+
+    def test_shorts_info_landscape_ineligible(self):
+        """横屏 1920x1080 → eligible False，reason 标注横屏。"""
+        video = self._make_video("1920x1080", duration=1)
+        info = ingest.shorts_info(str(video))
+        self.assertFalse(info["eligible"])
+        self.assertIn("横屏", info["reason"])
+
+    def test_shorts_info_too_long_ineligible(self):
+        """竖屏但时长 200s > 180s → eligible False，reason 含 180。"""
+        video = self._make_video("540x960", duration=200)
+        info = ingest.shorts_info(str(video))
+        self.assertFalse(info["eligible"])
+        self.assertIn("180", info["reason"])
+
+    def test_shorts_info_audio_only(self):
+        """纯音频 → eligible False 且 reason 含「纯音频」。"""
+        info = ingest.shorts_info(str(self.audio))
+        self.assertFalse(info["eligible"])
+        self.assertIn("纯音频", info["reason"])
+
+    def test_asset_json_contains_shorts(self):
+        """真实 process_one 产出的 asset.json 必含 shorts 键且有 eligible。"""
+        res = self._run(self.video, "--json")
+        self.assertEqual(res.returncode, 0, res.stderr.decode("utf-8", "replace")[-500:])
+        rec = json.loads(res.stdout.decode("utf-8"))
+        asset_json = Path(rec["inbox_dir"]) / "asset.json"
+        self.assertTrue(asset_json.exists())
+        data = json.loads(asset_json.read_text(encoding="utf-8"))
+        self.assertIn("shorts", data)
+        self.assertIsNotNone(data["shorts"])
+        self.assertIn("eligible", data["shorts"])
 
 
 if __name__ == "__main__":

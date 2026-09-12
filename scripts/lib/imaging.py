@@ -57,6 +57,7 @@ BLACK_PBLACK = 90
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
+FFPROBE = os.environ.get("FFPROBE", "ffprobe")
 
 try:  # Pillow 为可选依赖：可用则用于文字封面与黑帧判定
     from PIL import Image, ImageDraw, ImageFont, ImageStat  # noqa: F401
@@ -178,19 +179,79 @@ def _write_black_jpeg(out_path, width, height):
     return out_path
 
 
-def extract_frame(video, out_path, at_sec):
-    """在 at_sec 秒处抽取一帧到 out_path。成功返回 True，失败返回 False。"""
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+def _orientation(width, height):
+    """按宽高比返回方向：'portrait' / 'square' / 'landscape'；参数非法返回 None。"""
     try:
-        at = max(0.0, float(at_sec))
+        w = float(width)
+        h = float(height)
     except (TypeError, ValueError):
-        at = 0.0
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    ratio = w / h
+    if ratio < 0.98:
+        return "portrait"
+    if ratio <= 1.02:
+        return "square"
+    return "landscape"
+
+
+def detect_canvas(width, height):
+    """按源宽高比返回封面画布尺寸 (w, h)。
+
+    竖屏（width/height < 0.98）→ (1080, 1920)
+    方形（0.98 <= ratio <= 1.02）→ (1080, 1080)
+    横屏（ratio > 1.02）→ (1080, 720)   # 现状，保持不变
+    参数非法/None → (1080, 720)
+    """
+    try:
+        w = float(width)
+        h = float(height)
+    except (TypeError, ValueError):
+        return (1080, 720)
+    if w <= 0 or h <= 0:
+        return (1080, 720)
+    ratio = w / h
+    if ratio < 0.98:
+        return (1080, 1920)
+    if ratio <= 1.02:
+        return (1080, 1080)
+    return (1080, 720)
+
+
+def probe_size(path):
+    """用 ffprobe 取第一个视频流的 (width, height)；无视频流/失败返回 None。"""
     cmd = [
-        FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
-        "-ss", repr(at), "-i", str(video),
-        "-frames:v", "1", "-q:v", "2", str(out_path),
+        FFPROBE, "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path),
     ]
+    try:
+        res = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        return None
+    text = (res.stdout or b"").decode("utf-8", "replace").strip()
+    if not text:
+        return None
+    first = text.splitlines()[0]
+    parts = [p for p in first.split(",") if p != ""]
+    if len(parts) < 2:
+        return None
+    try:
+        width = int(parts[0])
+        height = int(parts[1])
+    except (TypeError, ValueError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return (width, height)
+
+
+def _run_extract(cmd, out_path):
+    """执行抽帧命令并校验产物，失败返回 False。"""
     try:
         res = subprocess.run(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120
@@ -200,6 +261,39 @@ def extract_frame(video, out_path, at_sec):
     if res.returncode != 0:
         return False
     return out_path.exists() and out_path.stat().st_size > 0
+
+
+def extract_frame(video, out_path, at_sec, scale_width=None):
+    """在 at_sec 秒处抽取一帧到 out_path。成功返回 True，失败返回 False。
+
+    scale_width=None → 行为与旧版完全一致（不加 -vf）。
+    scale_width=1080 → 先尝试 ``-vf scale=1080:-2``（宽度规范到 1080、高度按
+    比例且取偶数）；缩放抽帧失败时**回退**到不缩放的原始抽帧，不阻断封面生成。
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        at = max(0.0, float(at_sec))
+    except (TypeError, ValueError):
+        at = 0.0
+    base = [
+        FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+        "-ss", repr(at), "-i", str(video),
+    ]
+    if scale_width:
+        try:
+            width = max(2, int(scale_width))
+        except (TypeError, ValueError):
+            width = None
+        if width:
+            scaled = base + [
+                "-vf", "scale=%d:-2" % width,
+                "-frames:v", "1", "-q:v", "2", str(out_path),
+            ]
+            if _run_extract(scaled, out_path):
+                return True
+    cmd = base + ["-frames:v", "1", "-q:v", "2", str(out_path)]
+    return _run_extract(cmd, out_path)
 
 
 def _pil_is_black(path):
@@ -315,7 +409,8 @@ def ensure_cover(
     text=None,
     at_sec=None,
     force_text=False,
-    warnings=None
+    warnings=None,
+    size=None
 ):
     """确保生成封面：优先源抽帧（黑帧则改文字），否则文字封面。
 
@@ -323,18 +418,57 @@ def ensure_cover(
     - 抽帧成功但该帧接近全黑（黑帧视频，如 ASMR 黑屏源）→ 文字封面；
     - 抽帧失败（超时长/无视频流/ffmpeg 报错）→ 文字封面。
     返回封面 Path。mode 仅用于日志语境，不改变判定逻辑。
-    warnings 为可选 list，透传给 text_cover（用于回传 Pillow 缺失等提示）。
+
+    size=(w, h) 显式给出封面画布；未给出时自动推导：能 probe_size 到源尺寸
+    则 detect_canvas(width, height)，否则（纯音频/无源/探测失败）用 (1080, 720)。
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    if force_text or not source_video_or_none:
-        return text_cover(out_path, text=text, warnings=warnings)
-    src = str(source_video_or_none)
-    if not os.path.exists(src):
-        return text_cover(out_path, text=text, warnings=warnings)
+    src = None
+    if source_video_or_none and os.path.exists(str(source_video_or_none)):
+        src = str(source_video_or_none)
+
+    probed = probe_size(src) if src else None
+    if size is not None:
+        canvas = (int(size[0]), int(size[1]))
+    elif probed:
+        canvas = detect_canvas(probed[0], probed[1])
+    else:
+        canvas = (1080, 720)
+    width, height = canvas
+
+    if force_text or not src:
+        return text_cover(
+            out_path, text=text, width=width, height=height, warnings=warnings
+        )
+
+    # 抽帧比例错配保护：源比例与画布比例不同向（如 asmr 源竖屏、画布横屏）时，
+    # 跨比例无法在不裁切/不加黑边的前提下转换，直接用画布尺寸的文字封面兜底。
+    if probed is not None:
+        src_orientation = _orientation(probed[0], probed[1])
+        canvas_orientation = _orientation(width, height)
+        if (
+            src_orientation is not None
+            and canvas_orientation is not None
+            and src_orientation != canvas_orientation
+        ):
+            _note(warnings, "源比例与产物比例不一致，封面已改用文字封面")
+            return text_cover(
+                out_path, text=text, width=width, height=height, warnings=warnings
+            )
+
+    # 竖屏/方形画布规范到 1080 宽（横屏画布不缩放，保持现状）。
+    scale_width = None
+    if canvas != (1080, 720) and (probed is None or probed[0] != 1080):
+        scale_width = 1080
+
     at = 0.0 if at_sec is None else float(at_sec)
-    if extract_frame(src, out_path, at):
+    if extract_frame(src, out_path, at, scale_width=scale_width):
         if is_black_frame(str(out_path)):
-            return text_cover(out_path, text=text, warnings=warnings)
+            return text_cover(
+                out_path, text=text, width=width, height=height, warnings=warnings
+            )
         return out_path
-    return text_cover(out_path, text=text, warnings=warnings)
+    return text_cover(
+        out_path, text=text, width=width, height=height, warnings=warnings
+    )

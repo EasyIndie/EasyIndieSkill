@@ -60,6 +60,10 @@ FFPROBE = os.environ.get("FFPROBE", "ffprobe")
 DEFAULT_OUT = os.path.join(os.path.expanduser("~"), "EasyIndie", "work")
 MODE_CHOICES = ("auto", "raw", "asmr", "clip", "audio")
 
+# YouTube Shorts 判定：方形或竖屏（width <= height）且时长 <= 180 秒。
+# API 无专门参数，平台按此规则自动归类。
+SHORTS_MAX_SECONDS = 180.0
+
 
 class IngestError(Exception):
     """带退出码的处理器错误。"""
@@ -219,6 +223,77 @@ def decide_mode(info, requested):
     return "raw" if info["has_video"] else "audio"
 
 
+def _gcd(a, b):
+    """辗转相除求最大公约数（用于宽高比化简）。"""
+    a, b = abs(int(a)), abs(int(b))
+    while b:
+        a, b = b, a % b
+    return a or 1
+
+
+def _shorts_fail(reason, width=None, height=None, duration=None, aspect=None):
+    """构造不合格的 Shorts 判定结果（统一字段）。"""
+    return {
+        "eligible": False,
+        "aspect": aspect,
+        "width": width,
+        "height": height,
+        "duration": duration,
+        "reason": reason,
+    }
+
+
+def shorts_info(path):
+    """探测媒体并返回 Shorts 资格 dict。
+
+    eligible = 有视频流且 width <= height 且 duration <= SHORTS_MAX_SECONDS。
+    aspect 用 gcd 化简成「宽:高」（如 1080x1920 → 9:16）；无视频流为 None。
+    探测失败不抛异常，返回 eligible=False 且在 reason 中说明。
+    """
+    try:
+        info = probe_file(path)
+    except IngestError as exc:
+        return _shorts_fail("Shorts 探测失败：%s" % exc.message)
+    except Exception as exc:  # noqa: BLE001 - 判定不应阻断素材产出
+        return _shorts_fail("Shorts 探测失败：%s" % exc)
+
+    width = info.get("width")
+    height = info.get("height")
+    duration = info.get("duration")
+    if not info.get("has_video") or not width or not height:
+        return _shorts_fail("纯音频（无视频流）", duration=duration)
+
+    width = int(width)
+    height = int(height)
+    aspect = "%d:%d" % (width // _gcd(width, height), height // _gcd(width, height))
+
+    if width > height:
+        return _shorts_fail(
+            "横屏 %dx%d（非竖屏/方形）" % (width, height),
+            width=width, height=height, duration=duration, aspect=aspect,
+        )
+    if duration is None:
+        return _shorts_fail(
+            "时长未知，无法确认 ≤ %.0fs" % SHORTS_MAX_SECONDS,
+            width=width, height=height, duration=duration, aspect=aspect,
+        )
+    if float(duration) > SHORTS_MAX_SECONDS:
+        return _shorts_fail(
+            "时长 %.1fs > %.0fs" % (float(duration), SHORTS_MAX_SECONDS),
+            width=width, height=height, duration=duration, aspect=aspect,
+        )
+    label = "方形" if width == height else "竖屏"
+    return {
+        "eligible": True,
+        "aspect": aspect,
+        "width": width,
+        "height": height,
+        "duration": duration,
+        "reason": "%s %dx%d · %.1fs ≤ %.0fs"
+        % (label, width, height, float(duration), SHORTS_MAX_SECONDS),
+    }
+
+
 # ---------------- 加工 ----------------
 
 def proc_raw(src, asset_dir, info):
@@ -323,6 +398,7 @@ def _build_record(src, asset_dir, mode, info, args, dry_run):
             "height": info["height"],
         },
         "warnings": [],
+        "shorts": None,
         "source_url": args.source_url or "",
         "source_title": args.source_title or "",
         "dry_run": bool(dry_run),
@@ -340,6 +416,10 @@ def process_one(src, args, out_root):
     record = _build_record(src, asset_dir, mode, info, args, args.dry_run)
 
     if args.dry_run:
+        try:
+            record["shorts"] = shorts_info(str(src))
+        except Exception as exc:  # noqa: BLE001 - 判定失败不阻断
+            record["warnings"].append("Shorts 判定失败: %s" % exc)
         return record
 
     asset_dir.mkdir(parents=True, exist_ok=True)
@@ -361,7 +441,14 @@ def process_one(src, args, out_root):
     record["output_path"] = str(out)
     record["size_mb"] = round(out.stat().st_size / (1024.0 * 1024.0), 2)
 
-    # 封面
+    # Shorts 资格：按实际产物判定（asmr 会变 1920x1080 横屏、clip 会改时长）。
+    try:
+        record["shorts"] = shorts_info(str(out))
+    except Exception as exc:  # noqa: BLE001 - 判定失败不阻断素材产出
+        warnings.append("Shorts 判定失败: %s" % exc)
+
+    # 封面：画布按「实际产物」比例推导（asmr 会把竖屏源加工成横屏 1920x1080）；
+    # 产物探测不到视频流（如 audio 的 mp3）时回退到源，再回退默认 (1080, 720)。
     cover_path = asset_dir / "cover.jpg"
     has_video = info["has_video"]
     if args.cover_frame is not None:
@@ -370,6 +457,10 @@ def process_one(src, args, out_root):
         at_sec = min(3.0, max(0.0, (info["duration"] or 0.0) / 10.0))
     cover_source = str(src) if has_video else None
     cover_text = args.cover_text or args.source_title or slug
+    canvas = imaging.probe_size(str(out))
+    if canvas is None:
+        canvas = imaging.probe_size(str(src))
+    cover_size = imaging.detect_canvas(*canvas) if canvas else None
     try:
         result = imaging.ensure_cover(
             cover_source,
@@ -379,6 +470,7 @@ def process_one(src, args, out_root):
             at_sec=at_sec,
             force_text=bool(args.text_cover),
             warnings=warnings,
+            size=cover_size,
         )
         record["cover"] = str(result)
     except Exception as exc:  # 封面失败不阻断素材产出
@@ -414,16 +506,22 @@ def iter_inputs(path):
 def human_summary(record):
     if not record.get("ok"):
         return "❌ 失败: %s (%s)" % (record.get("source_path"), record.get("error"))
+    shorts = record.get("shorts") or {}
+    eligible = shorts.get("eligible") is True
     if record.get("dry_run"):
-        return "ℹ️ [dry-run] %s ｜ 模式=%s ｜ 时长=%ss" % (
+        line = "ℹ️ [dry-run] %s ｜ 模式=%s ｜ 时长=%ss" % (
             record["asset_id"], record["mode"], record["duration"],
         )
-    return (
-        "✅ %s\n   模式: %s ｜ 时长: %ss ｜ 输出: %sMB\n   输出: %s\n   封面: %s"
-        % (
-            record["asset_id"], record["mode"], record["duration"],
-            record["size_mb"], record["output_path"], record["cover"],
-        )
+        if eligible:
+            line += " ｜ 📱 SHORTS(%s)" % (shorts.get("aspect") or "?")
+        return line
+    head = "✅ %s\n   模式: %s ｜ 时长: %ss ｜ 输出: %sMB" % (
+        record["asset_id"], record["mode"], record["duration"], record["size_mb"],
+    )
+    if eligible:
+        head += " ｜ 📱 SHORTS"
+    return head + "\n   输出: %s\n   封面: %s" % (
+        record["output_path"], record["cover"],
     )
 
 
